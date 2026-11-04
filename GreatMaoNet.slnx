@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GreatMaoNet.Contracts/GreatMaoNet.Contracts.csproj" />
+    <Project Path="src/GreatMaoNetBee/GreatMaoNetBee.csproj" />
+    <Project Path="src/GreatMaoNetHive/GreatMaoNetHive.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj" />
+  </Folder>
+</Solution>

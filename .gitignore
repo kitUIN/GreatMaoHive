@@ -1,0 +1,14 @@
+**/bin/
+**/obj/
+**/data/
+artifacts/
+TestResults/
+*.db
+*.db-shm
+*.db-wal
+appsettings.Local.json
+.vs/
+*.pfx
+*.p12
+*.key
+*.env

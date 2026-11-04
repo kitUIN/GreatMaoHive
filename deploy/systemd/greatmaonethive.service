@@ -1,0 +1,22 @@
+[Unit]
+Description=GreatMaoNetHive network monitoring server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=greatmao
+Group=greatmao
+WorkingDirectory=/opt/greatmao/hive
+ExecStart=/opt/greatmao/hive/GreatMaoNetHive
+EnvironmentFile=/etc/greatmao/hive.env
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/greatmao/hive
+
+[Install]
+WantedBy=multi-user.target

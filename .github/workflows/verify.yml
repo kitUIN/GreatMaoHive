@@ -1,0 +1,66 @@
+name: Verify and publish Native AOT
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    name: Test and publish (${{ matrix.rid }})
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            suffix: .exe
+          - os: ubuntu-24.04
+            rid: linux-x64
+            suffix: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Tests
+        run: dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r ${{ matrix.rid }} -p:SelfContained=true --logger trx
+      - name: Native AOT publish
+        shell: pwsh
+        run: ./scripts/publish.ps1 -Runtime '${{ matrix.rid }}'
+      - name: Native process smoke test
+        shell: pwsh
+        run: ./scripts/smoke.ps1 -HivePath 'artifacts/publish/GreatMaoNetHive/${{ matrix.rid }}/GreatMaoNetHive${{ matrix.suffix }}' -BeePath 'artifacts/publish/GreatMaoNetBee/${{ matrix.rid }}/GreatMaoNetBee${{ matrix.suffix }}'
+      - name: Package native applications
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/packages | Out-Null
+          foreach ($application in @('GreatMaoNetHive', 'GreatMaoNetBee')) {
+            $source = "artifacts/publish/$application/${{ matrix.rid }}"
+            if ($IsWindows) {
+              Compress-Archive -Path "$source/*" -DestinationPath "artifacts/packages/$application-${{ matrix.rid }}.zip"
+            } else {
+              tar -czf "artifacts/packages/$application-${{ matrix.rid }}.tar.gz" -C $source .
+              if ($LASTEXITCODE -ne 0) { throw "Packaging failed for $application" }
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-packages-${{ matrix.rid }}
+          path: artifacts/packages/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-${{ matrix.rid }}
+          retention-days: 14
+          path: |
+            artifacts/verification/**/*.json
+            artifacts/verification/**/*.log
+            tests/**/TestResults/

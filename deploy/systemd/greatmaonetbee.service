@@ -1,0 +1,22 @@
+[Unit]
+Description=GreatMaoNetBee network monitoring agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=greatmao
+Group=greatmao
+WorkingDirectory=/opt/greatmao/bee
+ExecStart=/opt/greatmao/bee/GreatMaoNetBee
+EnvironmentFile=/etc/greatmao/bee.env
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/greatmao/bee
+
+[Install]
+WantedBy=multi-user.target
