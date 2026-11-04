@@ -1,0 +1,187 @@
+# GreatMaoNet 大猫猫网络监控
+
+`GreatMaoNetBee`（大猫猫网络小蜜蜂）采集服务器网卡流量，主动通过 WebSocket 连接 `GreatMaoNetHive`（大猫猫网络蜂巢）。蜂巢保存历史数据并提供 HTTP JSON API。目标平台为 Windows/Linux x64，项目默认启用 .NET 10 Native AOT，无网页、抓包、主动测速或进程级流量分类。
+
+## 项目与构建
+
+```text
+src/GreatMaoNet.Contracts  版本化协议、API DTO、JSON 源生成、WebSocket 封装
+src/GreatMaoNetBee        网卡/路由采集、本地检查点和补传队列、连接管理
+src/GreatMaoNetHive       HTTP API、连接管理、单写入队列、SQLite 历史聚合
+tests/GreatMaoNet.Tests   采集、存储、HTTP/WebSocket、并发入库测试
+scripts/                 发布与真实进程联调脚本
+deploy/systemd/           Linux 服务单元与环境配置示例
+```
+
+需要 .NET 10 SDK。`global.json` 允许使用更新的 .NET 10 feature band；运行时与主要 Microsoft 包锁定 10.0.14，SQLite 本机依赖使用 SQLitePCLRaw 3.0.5。普通 framework-dependent 程序需对应的 .NET/ASP.NET Core 运行时；正式 Native AOT 包不需安装 .NET。
+
+```powershell
+dotnet restore GreatMaoNet.slnx
+dotnet build GreatMaoNet.slnx
+# 自包含测试不依赖本机是否安装了项目所需的运行时补丁版本。
+dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r win-x64 -p:SelfContained=true
+./scripts/publish.ps1 -Runtime win-x64
+```
+
+Linux 上将 RID 换成 `linux-x64`，或直接逐个执行：
+
+```sh
+dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r linux-x64 -p:SelfContained=true
+dotnet publish src/GreatMaoNetHive -c Release -r linux-x64 -o artifacts/publish/GreatMaoNetHive/linux-x64
+dotnet publish src/GreatMaoNetBee -c Release -r linux-x64 -o artifacts/publish/GreatMaoNetBee/linux-x64
+```
+
+Windows AOT 需要 Visual Studio 的 **使用 C++ 的桌面开发**工作负载及 Windows SDK；Ubuntu 需要 `clang`、`zlib1g-dev`。Windows 和 Linux 包在各自系统构建。发布时应复制**整个发布目录**，包括 SQLite 本机库和配置文件，不能只复制主可执行文件。GitHub Actions 的 Windows/Linux 矩阵会运行测试、AOT 发布和原生进程联调。
+
+### GitHub CI
+
+推送、Pull Request 或手动触发 `Verify and publish Native AOT` 工作流后，Windows 与 Linux 分别运行自包含测试、Native AOT 发布和独立进程联调。单个平台失败不会取消另一个平台的验证，同一分支的新提交会取消旧任务。
+
+通过后可在该次 Actions 运行页面下载 `native-packages-win-x64` / `native-packages-linux-x64`，分别包含两端的 ZIP / tar.gz 完整发布包；Linux 的 tar.gz 保留可执行权限。`verification-*` 保存测试结果、联调 JSON 和日志，构建产物默认保留 14 天。CI 只上传构建产物，不会自动部署服务或创建 Release。
+
+## 配置与首次运行
+
+两端读取自己的 `appsettings.json`，可用 `appsettings.Local.json`、环境变量或命令行覆盖；环境变量以 `__` 表示配置层级。默认密钥为空，程序会拒绝启动，避免使用公共默认凭证。密钥至少 32 个字符；蜂巢的只读 API Key 和每只蜜蜂的 Token 必须各不相同。
+
+可在 PowerShell 7 中生成密钥：
+
+```powershell
+[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+```
+
+蜂巢 `appsettings.Local.json` 示例：
+
+```json
+{
+  "Urls": "https://0.0.0.0:7443",
+  "Kestrel": {
+    "Certificates": { "Default": { "Path": "hive.pfx", "Password": "证书密码" } }
+  },
+  "Hive": {
+    "ReadApiKey": "替换为独立随机查询密钥，至少32字符",
+    "DatabasePath": "data/hive.db",
+    "Bees": [
+      { "Id": "bee-01", "Token": "替换为bee-01专属随机密钥，至少32字符" },
+      { "Id": "bee-02", "Token": "替换为bee-02专属随机密钥，至少32字符" }
+    ]
+  }
+}
+```
+
+小蜜蜂 `appsettings.Local.json` 示例：
+
+```json
+{
+  "Bee": {
+    "Id": "bee-01",
+    "Name": "生产服务器01",
+    "HiveUrl": "wss://hive.example.com:7443/agent",
+    "Token": "填写蜂巢为bee-01配置的相同Token",
+    "DatabasePath": "data/bee.db",
+    "Interfaces": []
+  }
+}
+```
+
+`Id` 配置后保持稳定。数据库保存数据代次和序号；不要把同一只小蜜蜂的数据库复制到两台同时运行的服务器。蜂巢配置新节点后重启生效。启动两端即可注册，不需要客户端入站端口。
+
+生产直接使用受客户端信任的 HTTPS/WSS 证书，不关闭证书验证。服务仅在显式设置 `AllowInsecureTransport=true` 时允许明文连接，供本机开发使用；本机开发同时设置蜂巢 `Urls=http://127.0.0.1:7443` 和小蜜蜂 `HiveUrl=ws://127.0.0.1:7443/agent`。环境变量覆盖监听地址使用 `URLS`，以覆盖配置文件里的 `Urls`。
+
+相对数据库路径按应用 ContentRoot 解析。作为系统服务部署时，建议始终使用绝对数据库路径并给服务账号授予该目录写权限。
+
+### 网卡选择
+
+```powershell
+./GreatMaoNetBee.exe --list-interfaces
+```
+
+该命令无需连接配置，输出网卡 ID、名称及链路速率。默认 `Interfaces=[]` 自动选取主出口：先 IPv4 默认路由，再 IPv6，按 metric 选择；Windows 使用路由 metric 与接口 metric 之和。每 5 秒刷新路由和网卡元数据，每秒只读取已选网卡的计数。
+
+指定白名单可覆盖自动选择：`"Interfaces": ["Ethernet"]` 或 `"Interfaces": ["eth0", "eth1"]`，支持 ID 或名称。所选网卡汇总为一个节点，调用方应避免把承载同一份流量的网桥、VPN、底层接口同时加入。Linux 自动检测基于 `/proc/net/route` 与 `/proc/net/ipv6_route`；策略路由或特殊网络命名空间应使用白名单，在对应网络命名空间启动程序。
+
+## 统计口径与持久化
+
+- 接收即下载，发送即上传。累计以 64 位字节表示，速率以 bit/s 表示；`totalBytes=receivedBytes+sentBytes`。JavaScript 查询方需注意超过 `Number.MAX_SAFE_INTEGER` 时的整数字段精度。
+- 首次启动建立基线，不计入启动前已有的网卡计数。监控内网流量、协议开销和监控自身通信，不等同运营商账单。
+- 每秒读取计数，以单调时钟计算实际时间差；每约 5 秒按 UTC 时间桶保存并上传，首次/退出时可能有短桶。峰值取采样得到的每秒速率，无法测量比采样周期更短的瞬时峰值。
+- 网卡链路速率 `linkSpeedBitsPerSecond` 与实际传输速率分开，无法读取时为 `null`；不推断购买的公网带宽。
+- SQLite WAL + FULL 同步事务原子保存累计、计数器检查点和待上传记录。进程重启后，同一系统启动及同一网卡计数连续时，恢复停机期间的差值到累计；该段不会伪造为瞬时峰值或均摊进图表。
+- 系统重启、网卡计数归零、网卡切换、采样延迟或系统时间跳变会标记缺口。未监控期间的其他网卡历史计数不会补入。突然断电且操作系统计数丢失时，末尾尚未落盘的字节无法恢复。
+- 时钟跳变时不把尚未落盘的旧时间桶挪到新时间伪造历史，累计仍保留。蜂巢遇到超前 5 分钟以上的时间戳，会接收累计、标记缺口并跳过该条历史，避免修正时钟后补传队列永久阻塞；实时接口遇到超过 5 分钟的时钟偏差返回 `503`。部署时仍应启用系统时钟同步。
+- 累计 `hasGaps/lastGapAt` 表示有过不连续的观测；历史每点另有 `hasGap/coverageSeconds`。恢复到累计但无法分配时间的字节不计入历史桶，因此存在缺口时历史求和可能小于累计增量。
+- 小蜜蜂最多保留 7 天未确认明细，过期删除后仍保留累计和丢弃序号。蜂巢对 `(节点数据代次, 序号)` 采用持久化高水位去重，整批提交成功才确认；丢失确认后的重传不会重复计费或重复聚合。
+- 蜂巢在同一事务内维护 5 秒、分钟、小时桶，分别保存 24 小时、90 天、2 年，每分钟清理过期桶。平均值由字节数/有效观测时长计算，峰值取最大值。累计长期保存；缺失桶的字节与速率为 `null`，正常无流量才是 `0`。
+- 单实例 SQLite 写入队列容量 256，单批最多 100 条，WebSocket 消息最多 512 KiB，支持背压。客户端一批等待确认后才发送下一批，重连采用带抖动的指数退避，最高约 61 秒。
+- 15 秒应用心跳，45 秒无有效消息离线。短暂离线不删除节点及历史。实时查询并发时合并等待下一次采样，避免每个 HTTP 请求单独采集。
+
+**备份和恢复：**备份 SQLite 应使用其在线备份机制，或停止对应服务后复制数据库。运行中不能只拷贝 `.db` 而遗漏 WAL。蜂巢丢失已确认历史或小蜜蜂数据库重建时，握手会明确拒绝不一致的检查点；恢复匹配数据库，或为新监控生命周期配置新节点 ID。不能通过回退序号来继续旧累计。
+
+## HTTP API
+
+除 `/healthz` 外，查询接口均携带 `Authorization: Bearer <Hive.ReadApiKey>`。节点 Token 不能用于查询 API。所有时间戳为带偏移量的 ISO 8601；响应统一 UTC。
+
+| 方法和路径 | 说明 |
+|---|---|
+| `GET /healthz` | 存活检查，不依赖节点在线 |
+| `GET /api/v1/bees` | 已注册节点及在线状态、累计摘要 |
+| `GET /api/v1/bees/{id}` | 名称、系统、当前统计网卡、链路速率、最后采集/接收时间 |
+| `GET /api/v1/bees/{id}/traffic/total` | 自监控启用以来累计；离线仍可查询 |
+| `GET /api/v1/bees/{id}/traffic/current` | 请求后下一次有效采样；最多等待 3 秒 |
+| `GET /api/v1/bees/{id}/traffic/history?from=...&to=...&step=auto` | 折线图时间序列 |
+
+`total` 在节点尚未提交首批记录时为 `null`。`lastSampledAt` 是小蜜蜂上一次提交的实际采样时间，`lastReceivedAt` 是蜂巢最后收到消息的时间，两者含义不同。
+
+历史 `step` 支持 `auto|5s|1m|1h`。返回覆盖请求范围的完整 UTC 桶，`from` 向下对齐，`to` 向上对齐，响应的 `from/to` 给出实际边界，时间桶为左闭右开。`auto` 选择满足保留期和最多 10,000 个点的最细粒度；明确指定已过期粒度、无效时间范围或超出点数上限返回 `400`。区间当前仍未完成的桶可能不完整，由覆盖状态表示。
+
+示例：
+
+```sh
+curl -H "Authorization: Bearer $HIVE_READ_KEY" https://hive.example.com:7443/api/v1/bees
+curl -H "Authorization: Bearer $HIVE_READ_KEY" https://hive.example.com:7443/api/v1/bees/bee-01/traffic/total
+curl -H "Authorization: Bearer $HIVE_READ_KEY" https://hive.example.com:7443/api/v1/bees/bee-01/traffic/current
+curl -G -H "Authorization: Bearer $HIVE_READ_KEY" \
+  --data-urlencode 'from=2026-11-04T00:00:00Z' \
+  --data-urlencode 'to=2026-11-04T01:00:00Z' \
+  --data-urlencode 'step=auto' \
+  https://hive.example.com:7443/api/v1/bees/bee-01/traffic/history
+```
+
+历史点包含 `receivedBytes/sentBytes`、`downloadBitsPerSecond/uploadBitsPerSecond`、`peakDownloadBitsPerSecond/peakUploadBitsPerSecond`、`coverageSeconds/hasGap` 及网卡元数据。多条采样合并成同一桶时，网卡元数据为最后入账记录的值。
+
+错误采用 `application/problem+json`：`400` 参数/HTTPS 要求；`401` 凭证不正确；`404` 节点未知；`503` 节点离线、已断开或无可用网卡采样；`504` 实时采样超时。离线或超时时不返回伪装成实时值的缓存。
+
+## Windows Service 部署
+
+将整个发布目录放入固定位置，先配置密钥、证书和数据目录，再以管理员身份注册：
+
+```powershell
+sc.exe create GreatMaoNetHive binPath= '"C:\GreatMao\Hive\GreatMaoNetHive.exe"' start= auto
+sc.exe create GreatMaoNetBee binPath= '"C:\GreatMao\Bee\GreatMaoNetBee.exe"' start= auto
+sc.exe failure GreatMaoNetHive reset= 86400 actions= restart/5000/restart/10000/restart/30000
+sc.exe failure GreatMaoNetBee reset= 86400 actions= restart/5000/restart/10000/restart/30000
+sc.exe start GreatMaoNetHive
+sc.exe start GreatMaoNetBee
+```
+
+两端不必安装在同一机器。为服务配置专用账号，并给数据库目录写权限、配置/证书读权限。升级前停止服务，替换程序文件，保留配置与数据库，再启动。示例配置请保存为发布目录内的 `appsettings.Local.json`，数据路径使用绝对路径。
+
+## Linux systemd 部署
+
+1. 创建 `greatmao` 专用账号，将发布目录分别放到 `/opt/greatmao/hive`、`/opt/greatmao/bee`。
+2. 创建并授权 `/var/lib/greatmao/hive`、`/var/lib/greatmao/bee`；将对应 `.env.example` 复制到 `/etc/greatmao/hive.env` 或 `bee.env`，替换密钥和证书路径。密钥文件只允许管理员/服务账号读取。
+3. 将所需 `.service` 文件复制到 `/etc/systemd/system/`，执行 `systemctl daemon-reload`，然后 `systemctl enable --now greatmaonethive` 或 `greatmaonetbee`。
+4. 使用 `journalctl -u greatmaonetbee -f` 查看重连及异常日志。无需每秒记录正常采样日志。
+
+## 验证与性能
+
+```powershell
+./scripts/smoke.ps1 `
+  -HivePath artifacts/publish/GreatMaoNetHive/win-x64/GreatMaoNetHive.exe `
+  -BeePath artifacts/publish/GreatMaoNetBee/win-x64/GreatMaoNetBee.exe
+```
+
+脚本仅监听本机随机端口，生成临时凭证和独立数据库，检查真实网卡采集、实时/历史查询、蜂巢断开重连以及小蜜蜂异常退出后的恢复，结束后清理它启动的进程。结果与日志保存在 `artifacts/verification/smoke`，默认预热 15 秒、测量 30 秒 CPU/工作集，仅用于联调，不是长期性能承诺。可传 `-TransferUrl <公开下载地址>` 检查已知长度下载是否同时反映在选定网卡计数与持久化累计中；该检查会实际下载数据，且要求下载经过被监控网卡。
+
+采集不解析业务数据包，采样热路径只读取操作系统计数；CPU 开销主要取决于网卡数量与采样频率。数据库提交、JSON 序列化及上报集中到约 5 秒一次。Native AOT 与普通自包含 JIT 包的内存、启动和 CPU 表现应分开测量。长期保留历史需要预留磁盘容量，SQLite 删除过期记录后文件空间会复用，不会立即缩小文件。
+
+本地实际验证记录见 `docs/verification.md`。
