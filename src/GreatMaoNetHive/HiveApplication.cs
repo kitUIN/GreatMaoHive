@@ -1,5 +1,6 @@
 using System.Globalization;
 using GreatMaoNet.Contracts;
+using GreatMaoNet.Updates;
 
 namespace GreatMaoNetHive;
 
@@ -17,6 +18,7 @@ public static class HiveApplication
         builder.Services.AddSingleton(options);
         builder.Services.AddWindowsService(x => x.ServiceName = "GreatMaoNetHive");
         builder.Services.AddSystemd();
+        builder.Services.AddReleaseUpdates(builder.Configuration, "GreatMaoNetHive", Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService());
         builder.Services.ConfigureHttpJsonOptions(x => x.SerializerOptions.TypeInfoResolverChain.Insert(0, ProtocolJson.Default));
         builder.Services.AddProblemDetails();
         builder.Services.AddSingleton<HiveStore>();

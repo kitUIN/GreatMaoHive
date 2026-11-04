@@ -6,6 +6,8 @@
 
 ```text
 src/GreatMaoNet.Contracts  版本化协议、API DTO、JSON 源生成、WebSocket 封装
+src/GreatMaoNet.Updates    Release 查询、校验、下载、更新调度与文件回退
+src/GreatMaoNetUpdater     停服后替换程序并重启的独立 Native AOT 更新器
 src/GreatMaoNetBee        网卡/路由采集、本地检查点和补传队列、连接管理
 src/GreatMaoNetHive       HTTP API、连接管理、单写入队列、SQLite 历史聚合
 tests/GreatMaoNet.Tests   采集、存储、HTTP/WebSocket、并发入库测试
@@ -37,7 +39,49 @@ Windows AOT 需要 Visual Studio 的 **使用 C++ 的桌面开发**工作负载�
 
 推送、Pull Request 或手动触发 `Verify and publish Native AOT` 工作流后，Windows 与 Linux 分别运行自包含测试、Native AOT 发布和独立进程联调。单个平台失败不会取消另一个平台的验证，同一分支的新提交会取消旧任务。
 
-通过后可在该次 Actions 运行页面下载 `native-packages-win-x64` / `native-packages-linux-x64`，分别包含两端的 ZIP / tar.gz 完整发布包；Linux 的 tar.gz 保留可执行权限。`verification-*` 保存测试结果、联调 JSON 和日志，构建产物默认保留 14 天。CI 只上传构建产物，不会自动部署服务或创建 Release。
+通过后可在该次 Actions 运行页面下载 `native-packages-win-x64` / `native-packages-linux-x64`，包含两端的完整 ZIP 发布包、独立更新器和每包的 `.sha256` 校验文件。`verification-*` 保存测试结果、联调 JSON 和日志，构建产物默认保留 14 天。两平台还会验证更新器等待原进程退出、替换程序、重新启动和 HTTP 健康检查。
+
+推送 `vMAJOR.MINOR.PATCH` 稳定版本标签后，同一工作流会将标签版本写入二进制；仅当 Windows/Linux 全部测试、AOT 发布和联调通过，才创建 GitHub Release。上传全部四个包和四个校验文件后才公开草稿，避免客户端发现不完整的 Release。已公开的版本不能覆盖；修复应使用新标签。普通分支推送和 PR 只验证，不创建 Release。
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+本地带版本发布：`./scripts/publish.ps1 -Runtime win-x64 -Version 0.1.0`，随后 `./scripts/package.ps1 -Runtime win-x64`。目前只发布稳定版，不支持预发布标签。首次部署 Linux ZIP 解压后需执行 `chmod +x GreatMaoNetHive GreatMaoNetUpdater`（蜜蜂目录将 Hive 改为 Bee）；后续自动更新会设置执行权限。
+
+### 自动更新
+
+蜂巢和小蜜蜂默认在启动后检查一次，并每 6 小时查询 `kitUIN/GreatMaoHive` 的最新稳定 Release；只更新到更高版本。自动选择当前程序的 Windows/Linux x64 完整包，下载后验证大小、SHA-256、压缩路径和二进制内嵌版本，再正常停止程序。独立更新器替换程序及本机依赖，并重启 Windows Service、systemd 服务或原控制台程序。安装目录中的 `appsettings*.json`、数据库、证书及其他用户文件不会被替换；新版本增加的配置项使用代码默认值。
+
+```json
+{
+  "Updates": {
+    "Enabled": true,
+    "Repository": "kitUIN/GreatMaoHive",
+    "CheckIntervalMinutes": 360,
+    "AutoDownload": true,
+    "AutoApply": true,
+    "DownloadDirectory": ".updates"
+  }
+}
+```
+
+配置可放在 `appsettings.Local.json`，或通过 `Updates__Enabled` 等环境变量覆盖。`DownloadDirectory` 相对可执行文件目录解析；每个应用必须使用独立更新目录。关闭更新使用 `Enabled=false`；只下载不安装使用 `AutoApply=false`；仅检查使用 `AutoDownload=false, AutoApply=false`。网络、限流、校验或权限检查失败时继续监控，下一周期重试。开发构建没有独立 AOT 更新器时不运行后台更新。GitHub 仓库须公开；Fork 使用者应修改 `Repository`。
+
+以下命令不需要配置节点密钥：
+
+```powershell
+./GreatMaoNetBee.exe --version
+./GreatMaoNetBee.exe --check-update
+./GreatMaoNetBee.exe --download-update
+```
+
+蜂巢同样支持以上命令；Linux 去掉 `.exe`。`--download-update` 只下载已校验的完整 ZIP，不停止正在运行的服务。
+
+更新前的文件保存在安装目录 `.update-backup/`；更新记录保存在更新目录 `updater.log`、`last-update.json`。文件替换失败会还原已改动文件；控制台新进程在启动后 3 秒内退出也会回退。Windows 服务启动请求失败时回退并尝试启动旧版；systemd 负责在更新步骤结束后重启。**不提供运行一段时间后的健康检查回滚或数据库迁移回滚**。失败版本记录为 `failed-<版本>.txt`，防止反复停服；排查后删除对应失败标记可重试。残留 `pending.json` 会阻止新更新，应先检查日志和备份再处理。备份和下载包保留供排查，确认升级正常后可清理旧版本，勿删除正在使用的更新目录。
+
+服务账号必须拥有安装目录和更新目录的写权限；这些目录应仅允许管理员和服务账号写入。Windows Service 使用上述默认服务名，并要求服务账号有启动自身服务的权限（默认 LocalSystem 具备）；更新前会预检查权限。更新依赖完整发布包中的 `GreatMaoNetUpdater`，不能只部署主可执行文件。更新过程会短暂中断监控，蜜蜂使用现有检查点与补传机制恢复。
 
 ## 配置与首次运行
 
@@ -163,14 +207,16 @@ sc.exe start GreatMaoNetHive
 sc.exe start GreatMaoNetBee
 ```
 
-两端不必安装在同一机器。为服务配置专用账号，并给数据库目录写权限、配置/证书读权限。升级前停止服务，替换程序文件，保留配置与数据库，再启动。示例配置请保存为发布目录内的 `appsettings.Local.json`，数据路径使用绝对路径。
+两端不必安装在同一机器。使用专用账号时，给数据库、安装目录和更新目录写权限、配置/证书读权限，并授予启动自身服务的权限。自动更新默认启用；如需人工升级，设置 `Updates:Enabled=false`，停止服务后替换程序文件，保留配置与数据库，再启动。示例配置请保存为发布目录内的 `appsettings.Local.json`，数据路径使用绝对路径。
 
 ## Linux systemd 部署
 
-1. 创建 `greatmao` 专用账号，将发布目录分别放到 `/opt/greatmao/hive`、`/opt/greatmao/bee`。
+1. 创建 `greatmao` 专用账号，将完整发布目录分别放到 `/opt/greatmao/hive`、`/opt/greatmao/bee`，给该账号安装目录的写权限，并为主程序及 `GreatMaoNetUpdater` 设置执行权限。
 2. 创建并授权 `/var/lib/greatmao/hive`、`/var/lib/greatmao/bee`；将对应 `.env.example` 复制到 `/etc/greatmao/hive.env` 或 `bee.env`，替换密钥和证书路径。密钥文件只允许管理员/服务账号读取。
 3. 将所需 `.service` 文件复制到 `/etc/systemd/system/`，执行 `systemctl daemon-reload`，然后 `systemctl enable --now greatmaonethive` 或 `greatmaonetbee`。
 4. 使用 `journalctl -u greatmaonetbee -f` 查看重连及异常日志。无需每秒记录正常采样日志。
+
+服务单元通过 `ExecStopPost` 在主程序退出后安装待更新文件，`Restart=always` 自动启动新版；手动 `systemctl stop` 仍会保持停止。必须同时更新本仓库的服务单元并执行 `systemctl daemon-reload`，旧单元不支持自动安装。更新目录固定为 `/var/lib/greatmao/<hive或bee>/updates`；如需更换，应同时修改 `Updates__DownloadDirectory` 和 `ExecStopPost` 的路径。`ReadWritePaths` 已允许安装目录和数据目录写入，但仍需正确设置实际文件所有权。
 
 ## 验证与性能
 

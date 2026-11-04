@@ -2,6 +2,9 @@ using GreatMaoNetBee;
 using GreatMaoNet.Contracts;
 using System.Net.NetworkInformation;
 using System.Text.Json;
+using GreatMaoNet.Updates;
+
+if (await UpdateRegistration.HandleCommandAsync(args, "GreatMaoNetBee")) return;
 
 if (args.Contains("--list-interfaces", StringComparer.Ordinal))
 {
@@ -24,6 +27,7 @@ options.DatabasePath = Path.GetFullPath(options.DatabasePath, builder.Environmen
 builder.Services.AddSingleton(options);
 builder.Services.AddWindowsService(x => x.ServiceName = "GreatMaoNetBee");
 builder.Services.AddSystemd();
+builder.Services.AddReleaseUpdates(builder.Configuration, "GreatMaoNetBee", Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService());
 builder.Services.AddSingleton<BeeStore>();
 builder.Services.AddSingleton<ICounterSource, NetworkCounterSource>();
 builder.Services.AddSingleton<SamplingService>();

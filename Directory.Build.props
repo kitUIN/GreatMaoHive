@@ -6,5 +6,6 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <InvariantGlobalization>true</InvariantGlobalization>
     <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
   </PropertyGroup>
 </Project>

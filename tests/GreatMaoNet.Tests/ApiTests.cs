@@ -21,7 +21,7 @@ public sealed class ApiFixture : IAsyncLifetime
     public HttpClient Client { get; private set; } = null!;
     public async Task InitializeAsync()
     {
-        var arguments = new List<string> { "--urls", "http://127.0.0.1:0", "--Hive:DatabasePath", Directory.File("hive.db"),
+        var arguments = new List<string> { "--Updates:Enabled", "false", "--urls", "http://127.0.0.1:0", "--Hive:DatabasePath", Directory.File("hive.db"),
             "--Hive:ReadApiKey", ReadKey, "--Hive:Bees:0:Id", "bee-01", "--Hive:Bees:0:Token", BeeKey,
             "--Hive:AllowInsecureTransport", "true", "--Logging:LogLevel:Default", "None" };
         for (int i = 0; i < 100; i++)

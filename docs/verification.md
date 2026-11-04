@@ -44,3 +44,17 @@
 - Windows Service/systemd 安装文件及说明已经提供，未在本机注册生产服务、开放生产端口或部署到外部服务器。
 
 普通自包含包仅用于已完成的功能联调。正式部署 Native AOT 时，应先补齐对应系统工具链，执行 `scripts/publish.ps1` 或 README 中的 Linux 发布命令，再对生成的原生包运行同一个联调脚本。
+
+## Release 与自动更新验证（2026-11-04，后续验证）
+
+本轮环境为 Windows 10.0.22631 x64、.NET SDK 10.0.103，已可执行 Native AOT 发布；上文关于 Windows 缺少链接器的记录属于此前环境。
+
+- 自动化测试：`dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r win-x64 -p:SelfContained=true --logger "trx;LogFileName=release-update.trx"`，**49 通过、0 失败、0 跳过**。
+- 新增更新测试覆盖数字版本比较、稳定版限制、平台资源选择、无 Release、限流、缺失资源、下载取消/截断/摘要错误、缓存重新校验、路径穿越、符号链接、重复压缩条目、配置/数据库保留和部分替换失败后的文件回退。
+- `scripts/publish.ps1 -Runtime win-x64 -Version 0.1.0` 成功发布 Hive、Bee 和独立更新器的 Windows Native AOT 二进制，构建没有警告或错误；两端 `--version` 输出 `0.1.0`。
+- `scripts/update-smoke.ps1 -Runtime win-x64`：使用原生更新器等待旧 Hive 退出、替换安装目录、启动 Hive 并检查 HTTP 健康；配置与数据库保留，更新完成记录已生成。结果位于 `artifacts/verification/update-*/result.json`。
+- 原生两端联调：`scripts/smoke.ps1 -HivePath artifacts/publish/GreatMaoNetHive/win-x64/GreatMaoNetHive.exe -BeePath artifacts/publish/GreatMaoNetBee/win-x64/GreatMaoNetBee.exe -OutputDirectory artifacts/verification/release-native -WarmupSeconds 2 -ObservationSeconds 5` 通过，包括实际采集、查询、蜂巢断线重连、小蜜蜂异常退出恢复。这是功能检查，短时资源数据不作性能结论。
+- 原生 Bee 的 `--check-update` 已访问真实 GitHub API，并在仓库没有 Release 时正常返回无新稳定版。
+- GitHub 工作流经 actionlint v1.7.7 检查通过；PowerShell 脚本语法检查通过。
+
+Windows Service 控制管理器重启和 Linux systemd 的 `ExecStopPost` 集成尚未在本机实际安装服务验证。Linux 原生发布与运行、GitHub Release 创建需由远端 CI 执行。当前更新回退只覆盖文件替换失败和明确的启动失败，不包含数据库迁移或长期运行健康回滚。未在本机注册生产服务或创建线上 Release。

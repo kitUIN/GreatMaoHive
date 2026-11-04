@@ -1,10 +1,15 @@
 name: Verify and publish Native AOT
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 jobs:
   verify:
     name: Test and publish (${{ matrix.rid }})
@@ -25,6 +30,21 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $version = '0.1.0'
+          if ($env:REF_TYPE -eq 'tag') {
+            if ($env:REF_NAME -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+              throw 'Release tags must be vMAJOR.MINOR.PATCH (stable releases only).'
+            }
+            $version = $env:REF_NAME.Substring(1)
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Linux native dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
@@ -32,23 +52,23 @@ jobs:
         run: dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r ${{ matrix.rid }} -p:SelfContained=true --logger trx
       - name: Native AOT publish
         shell: pwsh
-        run: ./scripts/publish.ps1 -Runtime '${{ matrix.rid }}'
+        run: ./scripts/publish.ps1 -Runtime '${{ matrix.rid }}' -Version '${{ steps.version.outputs.version }}'
+      - name: Verify embedded version
+        shell: pwsh
+        run: |
+          foreach ($application in @('GreatMaoNetHive', 'GreatMaoNetBee')) {
+            $version = & "./artifacts/publish/$application/${{ matrix.rid }}/$application${{ matrix.suffix }}" --version
+            if ($LASTEXITCODE -ne 0 -or $version -ne '${{ steps.version.outputs.version }}') { throw 'Binary version mismatch' }
+          }
       - name: Native process smoke test
         shell: pwsh
         run: ./scripts/smoke.ps1 -HivePath 'artifacts/publish/GreatMaoNetHive/${{ matrix.rid }}/GreatMaoNetHive${{ matrix.suffix }}' -BeePath 'artifacts/publish/GreatMaoNetBee/${{ matrix.rid }}/GreatMaoNetBee${{ matrix.suffix }}'
+      - name: Native updater replacement and restart test
+        shell: pwsh
+        run: ./scripts/update-smoke.ps1 -Runtime '${{ matrix.rid }}'
       - name: Package native applications
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts/packages | Out-Null
-          foreach ($application in @('GreatMaoNetHive', 'GreatMaoNetBee')) {
-            $source = "artifacts/publish/$application/${{ matrix.rid }}"
-            if ($IsWindows) {
-              Compress-Archive -Path "$source/*" -DestinationPath "artifacts/packages/$application-${{ matrix.rid }}.zip"
-            } else {
-              tar -czf "artifacts/packages/$application-${{ matrix.rid }}.tar.gz" -C $source .
-              if ($LASTEXITCODE -ne 0) { throw "Packaging failed for $application" }
-            }
-          }
+        run: ./scripts/package.ps1 -Runtime '${{ matrix.rid }}'
       - uses: actions/upload-artifact@v4
         with:
           name: native-packages-${{ matrix.rid }}
@@ -64,3 +84,44 @@ jobs:
             artifacts/verification/**/*.json
             artifacts/verification/**/*.log
             tests/**/TestResults/
+  release:
+    name: Publish GitHub Release
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-packages-*
+          path: packages
+          merge-multiple: true
+      - name: Publish complete verified release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = Get-ChildItem packages -File
+          if ($packages.Count -ne 8) { throw 'Expected four packages and four checksums.' }
+          foreach ($application in @('GreatMaoNetHive', 'GreatMaoNetBee')) {
+            foreach ($rid in @('win-x64', 'linux-x64')) {
+              $name = "$application-$rid.zip"
+              $expected = ((Get-Content -Raw "packages/$name.sha256").Trim() -split '\s+')[0]
+              if ((Get-FileHash "packages/$name" -Algorithm SHA256).Hash -ne $expected) { throw "Checksum mismatch: $name" }
+            }
+          }
+          $draft = gh release view $env:RELEASE_TAG --json isDraft --jq .isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if ($draft -ne 'true') { throw 'Release is already published; use a new version tag.' }
+          } else {
+            gh release create $env:RELEASE_TAG --verify-tag --draft --generate-notes --title $env:RELEASE_TAG
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create draft release.' }
+          }
+          gh release upload $env:RELEASE_TAG $packages.FullName --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to upload release assets; release remains a draft.' }
+          gh release edit $env:RELEASE_TAG --draft=false
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish release.' }

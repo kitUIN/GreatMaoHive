@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../GreatMaoNet.Contracts/GreatMaoNet.Contracts.csproj" />
+    <ProjectReference Include="../GreatMaoNet.Updates/GreatMaoNet.Updates.csproj" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.14" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.14" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />

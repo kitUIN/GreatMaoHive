@@ -49,6 +49,7 @@ function Wait-Node([datetimeoffset]$After) {
     throw 'Bee did not become online with a fresh persisted sample.'
 }
 $hiveVariables = @{
+    Updates__Enabled = 'false'
     URLS = $baseUrl
     Hive__DatabasePath = (Join-Path $runDirectory 'hive.db')
     Hive__ReadApiKey = $readKey
@@ -57,6 +58,7 @@ $hiveVariables = @{
     Hive__AllowInsecureTransport = 'true'
 }
 $beeVariables = @{
+    Updates__Enabled = 'false'
     Bee__Id = 'smoke-bee'
     Bee__Name = 'Smoke Bee'
     Bee__HiveUrl = "ws://127.0.0.1:$port/agent"

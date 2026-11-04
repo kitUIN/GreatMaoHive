@@ -1,6 +1,8 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/GreatMaoNet.Contracts/GreatMaoNet.Contracts.csproj" />
+    <Project Path="src/GreatMaoNet.Updates/GreatMaoNet.Updates.csproj" />
+    <Project Path="src/GreatMaoNetUpdater/GreatMaoNetUpdater.csproj" />
     <Project Path="src/GreatMaoNetBee/GreatMaoNetBee.csproj" />
     <Project Path="src/GreatMaoNetHive/GreatMaoNetHive.csproj" />
   </Folder>

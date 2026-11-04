@@ -9,14 +9,18 @@ User=greatmao
 Group=greatmao
 WorkingDirectory=/opt/greatmao/hive
 ExecStart=/opt/greatmao/hive/GreatMaoNetHive
+ExecStopPost=/opt/greatmao/hive/GreatMaoNetUpdater /opt/greatmao/hive /var/lib/greatmao/hive/updates
+Environment=GREATMAO_SYSTEMD_UPDATER=1
+Environment=Updates__DownloadDirectory=/var/lib/greatmao/hive/updates
 EnvironmentFile=/etc/greatmao/hive.env
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStopSec=30
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/greatmao/hive
+ReadWritePaths=/opt/greatmao/hive
 
 [Install]
 WantedBy=multi-user.target

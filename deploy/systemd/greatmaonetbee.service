@@ -9,14 +9,18 @@ User=greatmao
 Group=greatmao
 WorkingDirectory=/opt/greatmao/bee
 ExecStart=/opt/greatmao/bee/GreatMaoNetBee
+ExecStopPost=/opt/greatmao/bee/GreatMaoNetUpdater /opt/greatmao/bee /var/lib/greatmao/bee/updates
+Environment=GREATMAO_SYSTEMD_UPDATER=1
+Environment=Updates__DownloadDirectory=/var/lib/greatmao/bee/updates
 EnvironmentFile=/etc/greatmao/bee.env
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStopSec=30
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/greatmao/bee
+ReadWritePaths=/opt/greatmao/bee
 
 [Install]
 WantedBy=multi-user.target
