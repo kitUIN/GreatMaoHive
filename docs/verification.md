@@ -58,3 +58,10 @@
 - GitHub 工作流经 actionlint v1.7.7 检查通过；PowerShell 脚本语法检查通过。
 
 Windows Service 控制管理器重启和 Linux systemd 的 `ExecStopPost` 集成尚未在本机实际安装服务验证。Linux 原生发布与运行、GitHub Release 创建需由远端 CI 执行。当前更新回退只覆盖文件替换失败和明确的启动失败，不包含数据库迁移或长期运行健康回滚。未在本机注册生产服务或创建线上 Release。
+
+## 蜂巢内置 Swagger 验证（2026-11-04）
+
+- 完整自包含测试 **57 通过、0 失败、0 跳过**；其中 8 项 Swagger 测试覆盖生产环境页面及内嵌资源、OpenAPI 响应模型、历史查询参数、Bearer 安全方案、无效文档版本和原有 HTTPS/查询鉴权要求。调整页面分组后，8 项 Swagger 测试再次通过。
+- 蜂巢 Windows Native AOT 发布成功，没有 AOT/裁剪警告。使用实际原生程序运行 `scripts/smoke.ps1`，页面、OpenAPI JSON、CSS/JavaScript、真实节点采集和 API 查询检查通过，结果在 `artifacts/verification/swagger-native/result.json`。本次沿用已有恢复测试结果，短时联调使用 `-SkipRestart`。
+- 使用独立无头 Edge 浏览器访问原生蜂巢 `/swagger`：6 个接口正常显示；通过授权弹窗输入临时查询密钥，执行 `/api/v1/bees` 获得 HTTP 200，实际请求正确携带 Bearer 头；外部网络请求 **0**，浏览器脚本错误 **0**。检查结果和截图在 `artifacts/verification/swagger-browser/`，临时进程已停止。
+- UI 使用官方 `swagger-ui-dist` 5.34.1 的内嵌资源，下载时验证 npm SHA-512，保留上游许可证。Linux AOT 与页面资源检查已包含在现有 CI 原生联调脚本中，尚未在本机执行 Linux 运行验证。

@@ -71,6 +71,16 @@ try {
     $hiveProcess = Start-Monitor $hiveExecutable $hiveVariables 'hive-1'
     $beeProcess = Start-Monitor $beeExecutable $beeVariables 'bee-1'
     $first = Wait-Node $started
+    $swagger = Invoke-WebRequest "$baseUrl/swagger/index.html" -TimeoutSec 10
+    if ($swagger.Content -notmatch 'SwaggerUIBundle') { throw 'Embedded Swagger UI is missing.' }
+    $openapi = Invoke-RestMethod "$baseUrl/swagger/v1/swagger.json" -TimeoutSec 10
+    if ($null -eq $openapi.paths.'/api/v1/bees'.get -or $openapi.components.securitySchemes.Bearer.scheme -ne 'bearer') {
+        throw 'OpenAPI document or Bearer authentication scheme is missing.'
+    }
+    foreach ($asset in @('swagger-ui.css', 'swagger-ui-bundle.js')) {
+        $response = Invoke-WebRequest "$baseUrl/swagger/$asset" -TimeoutSec 10
+        if ($response.RawContentLength -lt 1000) { throw "Swagger asset is missing: $asset" }
+    }
     $current = Invoke-RestMethod "$baseUrl/api/v1/bees/smoke-bee/traffic/current" -Headers $headers -TimeoutSec 5
     if (-not $current.available) { throw 'No usable network sample on this host.' }
     Start-Sleep -Seconds $WarmupSeconds
@@ -128,7 +138,7 @@ try {
         warmupSeconds = $WarmupSeconds; observationSeconds = $ObservationSeconds; beeCpuPercentOfOneCore = [Math]::Round($cpuCorePercent, 3)
         beeWorkingSetMiB = [Math]::Round($workingSetMiB, 2); current = $current
         finalTotals = $latest.totals; interfaces = $latest.node.interfaces; historyPoints = $history.points.Count
-        restartChecks = (-not $SkipRestart); transfer = $transfer; note = 'Short smoke measurement, not a production performance benchmark.'
+        restartChecks = (-not $SkipRestart); swagger = $true; transfer = $transfer; note = 'Short smoke measurement, not a production performance benchmark.'
     }
     $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $resultDirectory 'result.json') -Encoding utf8
     $report | ConvertTo-Json -Depth 12

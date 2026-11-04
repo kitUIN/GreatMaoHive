@@ -21,6 +21,7 @@ public static class HiveApplication
         builder.Services.AddReleaseUpdates(builder.Configuration, "GreatMaoNetHive", Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService());
         builder.Services.ConfigureHttpJsonOptions(x => x.SerializerOptions.TypeInfoResolverChain.Insert(0, ProtocolJson.Default));
         builder.Services.AddProblemDetails();
+        builder.Services.AddHiveSwagger();
         builder.Services.AddSingleton<HiveStore>();
         builder.Services.AddSingleton<DatabaseWriter>();
         builder.Services.AddHostedService(x => x.GetRequiredService<DatabaseWriter>());
@@ -46,20 +47,24 @@ public static class HiveApplication
             await next(context);
         });
 
-        app.MapGet("/healthz", () => Results.Json(new HealthResponse("ok"), ProtocolJson.Default.HealthResponse));
+        app.MapHiveSwagger();
+        app.MapGet("/healthz", () => Results.Json(new HealthResponse("ok"), ProtocolJson.Default.HealthResponse))
+            .WithTags("健康检查").WithSummary("存活检查").WithDescription("无需 API Key；不依赖节点在线状态。")
+            .Produces<HealthResponse>();
         app.MapGet("/agent", async (HttpContext context, BeeSessions sessions) =>
         {
             var credential = options.Bees.FirstOrDefault(x => HiveOptions.Matches(context.Request.Headers.Authorization, x.Token));
             if (credential is null) { await Results.Problem(statusCode: 401, title: "Invalid Bee credential.").ExecuteAsync(context); return; }
             if (!context.WebSockets.IsWebSocketRequest) { await Results.Problem(statusCode: 400, title: "WebSocket upgrade required.").ExecuteAsync(context); return; }
             await sessions.AcceptAsync(context, credential);
-        });
+        }).ExcludeFromDescription();
         app.MapGet("/api/v1/bees", (HiveStore store, BeeSessions sessions) => Results.Json(store.List().Select(node =>
         {
             var session = sessions.Get(node.Node.Id);
             return new BeeSummary(node.Node.Id, node.Node.Name, session?.Online == true, node.LastSampledAt,
                 session?.LastReceivedAt ?? node.LastReceivedAt, node.Totals);
-        }).ToArray(), ProtocolJson.Default.BeeSummaryArray));
+        }).ToArray(), ProtocolJson.Default.BeeSummaryArray))
+            .WithTags("节点").WithSummary("列出已注册节点").Produces<BeeSummary[]>().ProducesProblem(400).ProducesProblem(401);
         app.MapGet("/api/v1/bees/{id}", (string id, HiveStore store, BeeSessions sessions) =>
         {
             var node = store.Get(id);
@@ -67,7 +72,7 @@ public static class HiveApplication
             var session = sessions.Get(id);
             return Results.Json(new BeeDetail(node.Node, session?.Online == true, node.LastSampledAt,
                 session?.LastReceivedAt ?? node.LastReceivedAt, node.Totals), ProtocolJson.Default.BeeDetail);
-        });
+        }).WithTags("节点").WithSummary("查询节点详情").Produces<BeeDetail>().ProducesProblem(400).ProducesProblem(401).ProducesProblem(404);
         app.MapGet("/api/v1/bees/{id}/traffic/total", (string id, HiveStore store, BeeSessions sessions) =>
         {
             var node = store.Get(id);
@@ -75,8 +80,11 @@ public static class HiveApplication
             var session = sessions.Get(id);
             return Results.Json(new TotalResponse(node.Totals, session?.Online == true, node.LastSampledAt,
                 session?.LastReceivedAt ?? node.LastReceivedAt), ProtocolJson.Default.TotalResponse);
-        });
-        app.MapGet("/api/v1/bees/{id}/traffic/current", CurrentAsync);
+        }).WithTags("流量").WithSummary("查询累计流量").WithDescription("离线仍可查询；尚未提交首批记录时 totals 为 null。")
+            .Produces<TotalResponse>().ProducesProblem(400).ProducesProblem(401).ProducesProblem(404);
+        app.MapGet("/api/v1/bees/{id}/traffic/current", CurrentAsync)
+            .WithTags("流量").WithSummary("查询实时流量").WithDescription("等待节点下一次有效采样，最多 3 秒；离线或无有效采样返回 503，超时返回 504。")
+            .Produces<CurrentTraffic>().ProducesProblem(400).ProducesProblem(401).ProducesProblem(404).ProducesProblem(503).ProducesProblem(504);
         app.MapGet("/api/v1/bees/{id}/traffic/history", (string id, HttpContext context, HiveStore store) =>
         {
             if (store.Get(id) is null) return Missing();
@@ -88,7 +96,8 @@ public static class HiveApplication
                 return Results.Json(store.History(id, HistoryQuery.Create(from, to, step, DateTimeOffset.UtcNow)), ProtocolJson.Default.HistoryResponse);
             }
             catch (ArgumentException exception) { return Results.Problem(statusCode: 400, title: exception.Message); }
-        });
+        }).WithTags("流量").WithSummary("查询历史流量").WithDescription("返回 UTC 对齐的完整时间桶；缺失桶的字节和速率为 null，正常无流量为 0。")
+            .Produces<HistoryResponse>().ProducesProblem(400).ProducesProblem(401).ProducesProblem(404);
         return app;
     }
 

@@ -1,6 +1,6 @@
 # GreatMaoNet 大猫猫网络监控
 
-`GreatMaoNetBee`（大猫猫网络小蜜蜂）采集服务器网卡流量，主动通过 WebSocket 连接 `GreatMaoNetHive`（大猫猫网络蜂巢）。蜂巢保存历史数据并提供 HTTP JSON API。目标平台为 Windows/Linux x64，项目默认启用 .NET 10 Native AOT，无网页、抓包、主动测速或进程级流量分类。
+`GreatMaoNetBee`（大猫猫网络小蜜蜂）采集服务器网卡流量，主动通过 WebSocket 连接 `GreatMaoNetHive`（大猫猫网络蜂巢）。蜂巢保存历史数据并提供 HTTP JSON API，内置 Swagger UI 接口文档与调试页面。目标平台为 Windows/Linux x64，项目默认启用 .NET 10 Native AOT，无监控仪表盘、抓包、主动测速或进程级流量分类。
 
 ## 项目与构建
 
@@ -161,6 +161,12 @@ git push origin v0.1.0
 **备份和恢复：**备份 SQLite 应使用其在线备份机制，或停止对应服务后复制数据库。运行中不能只拷贝 `.db` 而遗漏 WAL。蜂巢丢失已确认历史或小蜜蜂数据库重建时，握手会明确拒绝不一致的检查点；恢复匹配数据库，或为新监控生命周期配置新节点 ID。不能通过回退序号来继续旧累计。
 
 ## HTTP API
+
+### Swagger 文档与调试
+
+蜂巢启动后访问 `https://<蜂巢地址>:7443/swagger`（自动跳转到 `/swagger/index.html`）。OpenAPI 文档地址为 `/swagger/v1/swagger.json`，包含健康检查及全部流量查询接口、参数、响应结构和错误码。页面在生产环境同样可用；HTML、JavaScript 和 CSS 全部内嵌到蜂巢二进制，无需外部 CDN，随 AOT 发布和自动更新一起交付。
+
+点击 **Authorize**，输入 `Hive.ReadApiKey` 的值（不加 `Bearer ` 前缀），即可使用 **Try it out → Execute** 调试查询。节点 Token 无法用于查询 API。页面不会持久保存输入的密钥；文档和静态资源可匿名访问，实际 `/api` 请求仍需有效 API Key。默认仍要求 HTTPS，本地 HTTP 调试需显式启用 `Hive:AllowInsecureTransport=true`。`/agent` 是小蜜蜂 WebSocket 协议入口，不作为 Swagger HTTP 调试接口。
 
 除 `/healthz` 外，查询接口均携带 `Authorization: Bearer <Hive.ReadApiKey>`。节点 Token 不能用于查询 API。所有时间戳为带偏移量的 ISO 8601；响应统一 UTC。
 
