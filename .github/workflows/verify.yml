@@ -57,14 +57,20 @@ jobs:
             $version = $env:REF_NAME.Substring(1)
           }
           "version=$version" >> $env:GITHUB_OUTPUT
-      - name: Linux native dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
       - name: Tests
         run: dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r ${{ matrix.rid }} -p:SelfContained=true --logger trx
       - name: Native AOT publish
         shell: pwsh
         run: ./scripts/publish.ps1 -Runtime '${{ matrix.rid }}' -Version '${{ steps.version.outputs.version }}'
+      - name: Debian 11 dependencies, TLS, database and native compatibility
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/source" -w /source debian:bullseye-slim bash -ec '
+            apt-get update
+            apt-get install -y --no-install-recommends python3 ca-certificates libssl1.1 zlib1g openssl
+            python3 scripts/test_install_linux.py
+            python3 scripts/linux-compat-smoke.py
+          '
       - name: Verify embedded version
         shell: pwsh
         run: |

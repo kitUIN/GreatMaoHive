@@ -17,17 +17,49 @@ fi
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || { echo 'Only Linux x86_64 is supported.' >&2; exit 1; }
 [[ $EUID == 0 ]] || { echo 'Run with sudo bash install-linux.sh ...' >&2; exit 1; }
 [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null || { echo 'A running systemd is required.' >&2; exit 1; }
-if ! python3 -c 'import ssl, zlib, ctypes; ctypes.CDLL("libssl.so.3")' >/dev/null 2>&1; then
+# BEGIN DEPENDENCY SETUP
+runtime_dependencies_available() {
+    python3 - <<'DEPENDENCIES'
+import ctypes
+import ssl
+import zlib
+for name in ("libssl.so.3", "libssl.so.1.1"):
+    try:
+        ctypes.CDLL(name)
+        break
+    except OSError:
+        pass
+else:
+    raise SystemExit(1)
+DEPENDENCIES
+}
+if ! runtime_dependencies_available >/dev/null 2>&1; then
     if command -v apt-get >/dev/null; then
         apt-get update
-        apt-get install -y python3 ca-certificates libssl3 zlib1g
+        openssl_package=
+        for candidate in libssl3t64 libssl3 libssl1.1; do
+            if LC_ALL=C apt-cache policy "$candidate" | awk '$1 == "Candidate:" && $2 != "(none)" { found = 1 } END { exit !found }'; then
+                openssl_package=$candidate
+                break
+            fi
+        done
+        if [[ -z "$openssl_package" ]]; then
+            echo 'OpenSSL 1.1 or 3 is required, but the configured apt repositories provide none of libssl3t64, libssl3 or libssl1.1.' >&2
+            exit 1
+        fi
+        apt-get install -y python3 ca-certificates "$openssl_package" zlib1g
     elif command -v dnf >/dev/null; then
         dnf install -y python3 ca-certificates openssl-libs zlib shadow-utils
     else
-        echo 'Install Python 3, CA certificates, OpenSSL 3 and zlib, then retry.' >&2
+        echo 'Install Python 3, CA certificates, OpenSSL 1.1 or 3 and zlib, then retry.' >&2
+        exit 1
+    fi
+    if ! runtime_dependencies_available >/dev/null 2>&1; then
+        echo 'Python 3, zlib or a usable OpenSSL 1.1/3 library is still missing after package installation.' >&2
         exit 1
     fi
 fi
+# END DEPENDENCY SETUP
 
 python3 - "$@" <<'PYTHON'
 # BEGIN INSTALLER PYTHON

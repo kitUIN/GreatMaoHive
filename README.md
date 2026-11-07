@@ -33,7 +33,7 @@ dotnet publish src/GreatMaoNetHive -c Release -r linux-x64 -o artifacts/publish/
 dotnet publish src/GreatMaoNetBee -c Release -r linux-x64 -o artifacts/publish/GreatMaoNetBee/linux-x64
 ```
 
-Windows AOT 需要 Visual Studio 的 **使用 C++ 的桌面开发**工作负载及 Windows SDK；Ubuntu 需要 `clang`、`zlib1g-dev`。Windows 和 Linux 包在各自系统构建。发布时应复制**整个发布目录**，包括 SQLite 本机库和配置文件，不能只复制主可执行文件。GitHub Actions 的 Windows/Linux 矩阵会运行测试、AOT 发布和原生进程联调。
+Windows AOT 需要 Visual Studio 的 **使用 C++ 的桌面开发**工作负载及 Windows SDK。Linux 发布需要 Docker：`scripts/publish.ps1 -Runtime linux-x64` 会在 Debian 11 容器中编译 Hive、Bee、更新器及 SQLite 本机库，将 glibc 基线保持在 2.31。SQLite 使用与 NuGet 包一致的 3.53.4 源码，并校验下载的 SHA-256。发布时应复制**整个发布目录**，包括 SQLite 本机库和配置文件，不能只复制主可执行文件。GitHub Actions 会运行测试、AOT 发布和原生进程联调，并在 Debian 11 / OpenSSL 1.1 环境验证安装依赖、HTTPS/WSS 连接及数据库写入，在 Ubuntu 24.04 环境验证进程重启与更新。
 
 ### GitHub CI
 
@@ -326,7 +326,7 @@ sudo bash install-linux.sh hive
 sudo bash install-linux.sh bee
 ```
 
-不填写 `hive` / `bee` 时会询问安装角色。脚本从 GitHub 查询最新稳定 Release，按同一个版本下载对应 Linux 包和 SHA-256 文件，校验并验证程序能在当前系统运行后，创建 `greatmao` 服务账号、部署完整文件、注册 systemd 服务并启用开机自启。缺少 Python 3 / OpenSSL 3 等依赖时自动通过 apt-get 或 dnf 安装；其他发行版需先安装依赖。当前发布包在 Ubuntu 24.04 上构建，较旧的 glibc 系统可能无法运行，脚本会在停止原服务前报错。
+不填写 `hive` / `bee` 时会询问安装角色。脚本从 GitHub 查询最新稳定 Release，按同一个版本下载对应 Linux 包和 SHA-256 文件，校验并验证程序能在当前系统运行后，创建 `greatmao` 服务账号、部署完整文件、注册 systemd 服务并启用开机自启。支持 Debian 11（bullseye，glibc 2.31 / OpenSSL 1.1）及更新的兼容系统。缺少 Python 3 / OpenSSL / zlib 等依赖时自动通过 apt-get 或 dnf 安装；apt 按顺序选择仓库中可用的 `libssl3t64`、`libssl3` 或 `libssl1.1`，安装后再次验证，不需要混用其他发行版的软件源。其他发行版需先安装依赖。旧的 v0.2.0 及以前发布包依赖较新 glibc，不能仅更新安装脚本来兼容 Debian 11；必须使用包含本次构建调整的新 Release。脚本会在停止原服务前验证下载的程序能否运行。
 
 首次安装 Hive 会询问首个 Bee ID，并生成独立的 ReadApiKey 和 Bee Token。默认 HTTPS 模式需要已有、受客户端信任的 PFX 证书；脚本会把证书复制到 `/etc/greatmao/certificates/hive.pfx` 并设置服务读取权限。也可选择 `local-proxy` 模式，仅监听 `http://127.0.0.1:7443`；此时需自行配置支持 WebSocket 的 HTTPS 反向代理。脚本不签发证书、不修改防火墙。
 

@@ -1,0 +1,12 @@
+.git
+.idea
+.vs
+artifacts
+**/bin
+**/obj
+**/TestResults
+**/data
+**/appsettings.Local.json
+**/*.pfx
+**/*.key
+**/*.env

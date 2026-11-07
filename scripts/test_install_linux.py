@@ -18,6 +18,48 @@ exec(compile(source.split("# BEGIN INSTALLER PYTHON\n", 1)[1].split("# END INSTA
              "install-linux.sh", "exec"), installer.__dict__)
 
 
+class DependencySetupTests(unittest.TestCase):
+    def bootstrap(self, package, ready=False):
+        # Exercise the real shell branch without installing packages on the test host.
+        setup = source.split("# BEGIN DEPENDENCY SETUP\n", 1)[1].split("# END DEPENDENCY SETUP", 1)[0]
+        stubs = '''
+set -euo pipefail
+python3() { return "$DEPENDENCIES_MISSING"; }
+apt-get() {
+    printf 'apt-get'; printf ' %s' "$@"; printf '\\n'
+    if [[ "$1" == install ]]; then DEPENDENCIES_MISSING=0; fi
+}
+apt-cache() {
+    if [[ "$2" == "$AVAILABLE_SSL" ]]; then
+        printf '  Candidate: 3.0.0\\n'
+    elif [[ "$2" == libssl3 ]]; then
+        printf '  Candidate: (none)\\n'
+    fi
+}
+'''
+        return subprocess.run(["bash", "-c", stubs + setup], capture_output=True, text=True,
+                              env=dict(os.environ, AVAILABLE_SSL=package,
+                                       DEPENDENCIES_MISSING="0" if ready else "1"))
+
+    def test_apt_selects_available_openssl_package(self):
+        for package in ("libssl3t64", "libssl3", "libssl1.1"):
+            with self.subTest(package=package):
+                result = self.bootstrap(package)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("apt-get install -y python3 ca-certificates " + package + " zlib1g", result.stdout)
+
+    def test_missing_openssl_reports_error_without_installing(self):
+        result = self.bootstrap("")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OpenSSL 1.1 or 3 is required", result.stderr)
+        self.assertNotIn("apt-get install", result.stdout)
+
+    def test_existing_dependencies_skip_package_manager(self):
+        result = self.bootstrap("", ready=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+
 class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
