@@ -1,9 +1,13 @@
+using GreatMaoNet.Contracts;
+
 namespace GreatMaoNetBee;
 
 public sealed class BeeOptions
 {
     public string Id { get; set; } = "";
     public string Name { get; set; } = Environment.MachineName;
+    public string? Region { get; set; }
+    public string? Ip { get; set; }
     public string HiveUrl { get; set; } = "wss://localhost:7443/agent";
     public string Token { get; set; } = "";
     public string DatabasePath { get; set; } = "data/bee.db";
@@ -12,6 +16,10 @@ public sealed class BeeOptions
 
     public void Validate()
     {
+        if (!NodeMetadata.TryNormalize(Region, Ip, out var region, out var ip))
+            throw new InvalidOperationException("Bee:Region must be at most 256 characters; Bee:Ip must be a bare IPv4 or IPv6 address. Both are optional.");
+        Region = region;
+        Ip = ip;
         if (string.IsNullOrWhiteSpace(Id) || Id.Length > 128 || Token.Length < 32)
             throw new InvalidOperationException("Bee:Id is required; Bee:Token must contain at least 32 characters.");
         if (!Uri.TryCreate(HiveUrl, UriKind.Absolute, out var uri) ||

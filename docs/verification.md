@@ -73,3 +73,11 @@ Windows Service 控制管理器重启和 Linux systemd 的 `ExecStopPost` 集成
 - HTTP/WebSocket 集成测试验证两个新接口的查询密钥鉴权、未连接节点、非法窗口/未知节点、真实连接断开持久化，以及超额后继续成功上报。Swagger 验证覆盖新增接口和查询参数，当前共 8 个 HTTP 接口。
 - 蜂巢 Windows Native AOT 发布成功，无警告/错误。`scripts/smoke.ps1` 新增两个接口的原生检查：环境变量绑定月度额度及 UTC+8 时区、超额后继续采集上报、持久化在线历史，并在杀死蜂巢后重启验证停机期间为 `unknown`、小蜜蜂断开重连有独立区间。输出 `artifacts/verification/quotas-online-native/result.json`。
 - 本轮未在 Linux 实机运行；同一联调脚本会由 Windows/Linux CI 调用。尚未推送本轮变更或发布新 Release。在线历史在本版本启用后才开始记录，不补造升级前的在线情况；周期用量只包含可归属时间的已持久化采样，不保证补全停机期间缺失的字节。
+
+## 小蜜蜂地区与 IP 验证（2026-11-07）
+
+- 自包含完整测试 **97 通过、0 失败、0 跳过**，结果 `tests/GreatMaoNet.Tests/TestResults/node-metadata.trx`。新增覆盖可选配置、首尾空白处理、IPv4/IPv6 规范化、非法 IP 与超长地区拒绝、上报后重启持久化、修改及清空字段且保留流量累计、缺少字段的旧版握手与旧数据库读取。
+- HTTP/WebSocket 集成验证在线与离线时节点列表、详情、额度查询均返回地区和 IP；其他未设置的节点返回 null。Swagger 验证三个相关响应模型包含 `region` 与 `ip`。
+- `scripts/publish.ps1 -Runtime win-x64` 完成蜂巢、小蜜蜂及更新器的 Windows Native AOT 发布，无警告或错误。原生两端联调通过，结果 `artifacts/verification/node-metadata-native/result.json`：环境变量设置地区及 IPv6、真实网卡采集、蜂巢重启保留信息、小蜜蜂改为另一地区及 IPv4 后重启更新，三个查询接口均返回新值，流量累计与在线历史检查继续通过。
+- 原生联调预热 2 秒、观测 5 秒，仅作功能检查。本轮未在 Linux 实机运行；新增检查已加入 Windows/Linux CI 共用的联调脚本。
+- 提交前整合远端 Linux 更新器进程标识修复后，再次运行完整自包含测试：**105 通过、0 失败、0 跳过**，结果 `tests/GreatMaoNet.Tests/TestResults/node-metadata-rebased.trx`。上述原生发布与联调在整合该独立修复前完成。

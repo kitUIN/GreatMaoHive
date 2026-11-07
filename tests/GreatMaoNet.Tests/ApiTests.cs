@@ -61,7 +61,7 @@ public sealed class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
     {
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         var token = cancellation.Token;
-        var node = TestData.Node();
+        var node = TestData.Node() with { Region = "中国香港", Ip = "2001:db8::10" };
         using var socket = new ClientWebSocket();
         socket.Options.SetRequestHeader("Authorization", "Bearer " + ApiFixture.BeeKey);
         await socket.ConnectAsync(new UriBuilder(fixture.Address) { Scheme = "ws", Path = "/agent" }.Uri, token);
@@ -75,6 +75,7 @@ public sealed class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
         Assert.Equal(1, (await protocol.ReceiveAsync(token))!.AcknowledgedSequence);
         var totalJson = await fixture.Client.GetStringAsync("/api/v1/bees/bee-01/traffic/total", token);
         Assert.Equal(150, JsonSerializer.Deserialize(totalJson, ProtocolJson.Default.TotalResponse)!.Totals!.TotalBytes);
+        await AssertMetadataAsync();
 
         var currentRequest = fixture.Client.GetAsync("/api/v1/bees/bee-01/traffic/current", token);
         var command = await protocol.ReceiveAsync(token);
@@ -101,6 +102,27 @@ public sealed class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
             await Task.Delay(20, token);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, (await fixture.Client.GetAsync("/api/v1/bees/bee-01/traffic/current", token)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await fixture.Client.GetAsync("/api/v1/bees/bee-01/traffic/total", token)).StatusCode);
+        await AssertMetadataAsync();
+
+        async Task AssertMetadataAsync()
+        {
+            var detail = JsonSerializer.Deserialize(await fixture.Client.GetStringAsync("/api/v1/bees/bee-01", token), ProtocolJson.Default.BeeDetail)!;
+            Assert.Equal(node.Region, detail.Node.Region);
+            Assert.Equal(node.Ip, detail.Node.Ip);
+            var bees = JsonSerializer.Deserialize(await fixture.Client.GetStringAsync("/api/v1/bees", token), ProtocolJson.Default.BeeSummaryArray)!;
+            var summary = Assert.Single(bees, bee => bee.Id == node.Id);
+            Assert.Equal(node.Region, summary.Region);
+            Assert.Equal(node.Ip, summary.Ip);
+            var quotas = JsonSerializer.Deserialize(await fixture.Client.GetStringAsync("/api/v1/bees/traffic/quotas", token), ProtocolJson.Default.TrafficQuotasResponse)!;
+            var quota = Assert.Single(quotas.Bees, bee => bee.Id == node.Id);
+            Assert.Equal(node.Region, quota.Region);
+            Assert.Equal(node.Ip, quota.Ip);
+            Assert.All(quotas.Bees.Where(bee => bee.Id != node.Id), bee =>
+            {
+                Assert.Null(bee.Region);
+                Assert.Null(bee.Ip);
+            });
+        }
     }
 
     [Fact]

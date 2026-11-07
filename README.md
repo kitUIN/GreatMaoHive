@@ -119,6 +119,8 @@ git push origin v0.1.0
   "Bee": {
     "Id": "bee-01",
     "Name": "生产服务器01",
+    "Region": "中国香港",
+    "Ip": "192.0.2.10",
     "HiveUrl": "wss://hive.example.com:7443/agent",
     "Token": "填写蜂巢为bee-01配置的相同Token",
     "DatabasePath": "data/bee.db",
@@ -128,6 +130,10 @@ git push origin v0.1.0
 ```
 
 `Id` 配置后保持稳定。数据库保存数据代次和序号；不要把同一只小蜜蜂的数据库复制到两台同时运行的服务器。蜂巢配置新节点后重启生效。启动两端即可注册，不需要客户端入站端口。
+
+`Bee:Region` 和 `Bee:Ip` 为可选的节点展示信息，也可通过环境变量 `Bee__Region`、`Bee__Ip` 或命令行 `--Bee:Region`、`--Bee:Ip` 设置。地区为最多 256 字符的自定义文本；IP 为单个标准点分十进制 IPv4 或裸 IPv6 地址（例如 `2001:db8::10`），不含端口、方括号或作用域。两项都会去掉首尾空白，空值表示未设置；IPv6 会规范化格式。IP 由用户填写，不自动探测公网地址，也不据此定位地区或选择采集网卡。示例 IP 为文档专用地址，部署时请替换为实际值或留空。
+
+修改后重启小蜜蜂，下一次成功连接会更新蜂巢保存的地区与 IP；留空可清除原值。节点列表、详情和周期额度查询均返回这两个字段，节点离线或蜂巢重启后仍可查询最后保存的值。旧版小蜜蜂及旧数据库缺少字段时返回 `null`，无需手动迁移数据库；旧版小蜜蜂重新连接也会将这两个字段清空。
 
 生产直接使用受客户端信任的 HTTPS/WSS 证书，不关闭证书验证。服务仅在显式设置 `AllowInsecureTransport=true` 时允许明文连接，供本机开发使用；本机开发同时设置蜂巢 `Urls=http://127.0.0.1:7443` 和小蜜蜂 `HiveUrl=ws://127.0.0.1:7443/agent`。环境变量覆盖监听地址使用 `URLS`，以覆盖配置文件里的 `Urls`。
 
@@ -173,9 +179,9 @@ git push origin v0.1.0
 | 方法和路径 | 说明 |
 |---|---|
 | `GET /healthz` | 存活检查，不依赖节点在线 |
-| `GET /api/v1/bees` | 已注册节点及在线状态、累计摘要 |
+| `GET /api/v1/bees` | 已注册节点及地区 `region`、IP `ip`、在线状态、累计摘要 |
 | `GET /api/v1/bees/traffic/quotas` | 所有已配置节点的周期额度、本周期已观测流量、剩余额度和超额标记 |
-| `GET /api/v1/bees/{id}` | 名称、系统、当前统计网卡、链路速率、最后采集/接收时间 |
+| `GET /api/v1/bees/{id}` | 名称、地区 `node.region`、IP `node.ip`、系统、当前统计网卡、链路速率、最后采集/接收时间 |
 | `GET /api/v1/bees/{id}/online/history?from=...&to=...` | 指定窗口的 online/offline/unknown 区间和时长 |
 | `GET /api/v1/bees/{id}/traffic/total` | 自监控启用以来累计；离线仍可查询 |
 | `GET /api/v1/bees/{id}/traffic/current` | 请求后下一次有效采样；最多等待 3 秒 |
@@ -238,7 +244,7 @@ curl -G -H "Authorization: Bearer $HIVE_READ_KEY" \
 
 `GET /api/v1/bees/traffic/quotas` 需携带查询 API Key，返回 `asOf` 和 `bees` 数组，包含所有当前配置的节点，包括离线、从未连接和未设上限的节点。每项包含：
 
-- `id/name/online`、`quota` 配置、UTC `periodStart/periodEnd`；
+- `id/name/region/ip/online`、`quota` 配置、UTC `periodStart/periodEnd`（未连接或未设置地区/IP 时对应字段为 `null`）；
 - 本周期 `receivedBytes/sentBytes/totalBytes`，其中总量为上传与下载之和；
 - `remainingBytes`（最小为 0）、`isExceeded`（总量严格大于额度时为 true）；
 - `hasGaps`、`lastSampledAt/lastReceivedAt`，用于判断采集完整性及新鲜度。

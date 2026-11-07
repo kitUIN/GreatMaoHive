@@ -47,6 +47,9 @@ public sealed partial class HiveStore : IDisposable
 
     public long Register(HelloMessage hello, DateTimeOffset now)
     {
+        if (!NodeMetadata.TryNormalize(hello.Node.Region, hello.Node.Ip, out var region, out var ip))
+            throw new InvalidDataException("Invalid node region/IP: region must be at most 256 characters and IP must be a bare IPv4 or IPv6 address.");
+        hello = hello with { Node = hello.Node with { Region = region, Ip = ip } };
         if (hello.Node.Id.Length is 0 or > 128 || hello.Node.Name.Length > 256 ||
             hello.Node.OperatingSystem.Length > 512 || !Guid.TryParseExact(hello.Node.DataEpoch, "N", out _) ||
             hello.LastAcknowledgedSequence < 0 || hello.LastSequence < hello.LastAcknowledgedSequence)

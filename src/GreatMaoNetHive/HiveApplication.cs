@@ -75,9 +75,11 @@ public static class HiveApplication
         {
             var session = sessions.Get(node.Node.Id);
             return new BeeSummary(node.Node.Id, node.Node.Name, session?.Online == true, node.LastSampledAt,
-                session?.LastReceivedAt ?? node.LastReceivedAt, node.Totals);
+                session?.LastReceivedAt ?? node.LastReceivedAt, node.Totals) { Region = node.Node.Region, Ip = node.Node.Ip };
         }).ToArray(), ProtocolJson.Default.BeeSummaryArray))
-            .WithTags("节点").WithSummary("列出已注册节点").Produces<BeeSummary[]>().ProducesProblem(400).ProducesProblem(401);
+            .WithTags("节点").WithSummary("列出已注册节点")
+            .WithDescription("包含小蜜蜂配置上报的 region 与 ip；未设置时为 null，离线仍返回最后保存的值。")
+            .Produces<BeeSummary[]>().ProducesProblem(400).ProducesProblem(401);
         app.MapGet("/api/v1/bees/{id}", (string id, HiveStore store, BeeSessions sessions) =>
         {
             var node = store.Get(id);
@@ -85,7 +87,9 @@ public static class HiveApplication
             var session = sessions.Get(id);
             return Results.Json(new BeeDetail(node.Node, session?.Online == true, node.LastSampledAt,
                 session?.LastReceivedAt ?? node.LastReceivedAt, node.Totals), ProtocolJson.Default.BeeDetail);
-        }).WithTags("节点").WithSummary("查询节点详情").Produces<BeeDetail>().ProducesProblem(400).ProducesProblem(401).ProducesProblem(404);
+        }).WithTags("节点").WithSummary("查询节点详情")
+            .WithDescription("node.region 与 node.ip 来自小蜜蜂配置，重启小蜜蜂并重新连接后更新；未设置时为 null，离线仍可查询。")
+            .Produces<BeeDetail>().ProducesProblem(400).ProducesProblem(401).ProducesProblem(404);
         app.MapGet("/api/v1/bees/{id}/traffic/total", (string id, HiveStore store, BeeSessions sessions) =>
         {
             var node = store.Get(id);

@@ -64,6 +64,8 @@ $beeVariables = @{
     Updates__Enabled = 'false'
     Bee__Id = 'smoke-bee'
     Bee__Name = 'Smoke Bee'
+    Bee__Region = 'Hong Kong'
+    Bee__Ip = '2001:db8::10'
     Bee__HiveUrl = "ws://127.0.0.1:$port/agent"
     Bee__Token = $beeKey
     Bee__DatabasePath = (Join-Path $runDirectory 'bee.db')
@@ -74,6 +76,9 @@ try {
     $hiveProcess = Start-Monitor $hiveExecutable $hiveVariables 'hive-1'
     $beeProcess = Start-Monitor $beeExecutable $beeVariables 'bee-1'
     $first = Wait-Node $started
+    if ($first.node.region -ne $beeVariables.Bee__Region -or $first.node.ip -ne $beeVariables.Bee__Ip) {
+        throw 'Bee region/IP configuration was not reported in node details.'
+    }
     $swagger = Invoke-WebRequest "$baseUrl/swagger/index.html" -TimeoutSec 10
     if ($swagger.Content -notmatch 'SwaggerUIBundle') { throw 'Embedded Swagger UI is missing.' }
     $openapi = Invoke-RestMethod "$baseUrl/swagger/v1/swagger.json" -TimeoutSec 10
@@ -121,10 +126,15 @@ try {
         $hiveProcess = Start-Monitor $hiveExecutable $hiveVariables 'hive-2'
         $reconnected = Wait-Node $restarted
         if ($reconnected.totals.totalBytes -lt $latest.totals.totalBytes) { throw 'Totals regressed after Hive restart.' }
+        if ($reconnected.node.region -ne $beeVariables.Bee__Region -or $reconnected.node.ip -ne $beeVariables.Bee__Ip) {
+            throw 'Bee region/IP was lost after Hive restart.'
+        }
         $beeProcess.Kill()
         $beeProcess.WaitForExit()
         Start-Sleep -Seconds 2
         $restarted = [datetime]::UtcNow
+        $beeVariables.Bee__Region = 'Tokyo'
+        $beeVariables.Bee__Ip = '192.0.2.10'
         $beeProcess = Start-Monitor $beeExecutable $beeVariables 'bee-2'
         $latest = Wait-Node $restarted
         if ($latest.totals.totalBytes -lt $reconnected.totals.totalBytes -or -not $latest.totals.hasGaps) {
@@ -137,6 +147,13 @@ try {
     if ($history.points.Count -eq 0) { throw 'History is empty.' }
     $quotas = Invoke-RestMethod "$baseUrl/api/v1/bees/traffic/quotas" -Headers $headers
     $quota = @($quotas.bees | Where-Object { $_.id -eq 'smoke-bee' })
+    $summaries = Invoke-RestMethod "$baseUrl/api/v1/bees" -Headers $headers
+    $summary = @($summaries | Where-Object { $_.id -eq 'smoke-bee' })
+    if ($summary.Count -ne 1 -or $quota.Count -ne 1 -or $summary[0].region -ne $beeVariables.Bee__Region -or $summary[0].ip -ne $beeVariables.Bee__Ip -or
+        $latest.node.region -ne $beeVariables.Bee__Region -or $latest.node.ip -ne $beeVariables.Bee__Ip -or
+        $quota[0].region -ne $beeVariables.Bee__Region -or $quota[0].ip -ne $beeVariables.Bee__Ip) {
+        throw 'Bee region/IP was not preserved in node list, details and quota queries.'
+    }
     if ($quota.Count -ne 1 -or $quota[0].quota.limitBytes -ne 1 -or $quota[0].quota.utcOffsetHours -ne 8 -or $quota[0].totalBytes -le 0 -or -not $quota[0].isExceeded) {
         throw 'Period quota configuration or traffic aggregation failed.'
     }

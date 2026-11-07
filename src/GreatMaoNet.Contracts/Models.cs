@@ -3,7 +3,11 @@ using System.Text.Json.Serialization;
 namespace GreatMaoNet.Contracts;
 
 public sealed record InterfaceInfo(string Id, string Name, long? LinkSpeedBitsPerSecond);
-public sealed record NodeInfo(string Id, string Name, string OperatingSystem, string DataEpoch, InterfaceInfo[] Interfaces);
+public sealed record NodeInfo(string Id, string Name, string OperatingSystem, string DataEpoch, InterfaceInfo[] Interfaces)
+{
+    public string? Region { get; init; }
+    public string? Ip { get; init; }
+}
 public sealed record TrafficTotals(DateTimeOffset StartedAt, long ReceivedBytes, long SentBytes,
     bool HasGaps, DateTimeOffset? LastGapAt)
 {
@@ -32,7 +36,11 @@ public sealed record WireMessage
 }
 
 public sealed record BeeSummary(string Id, string Name, bool Online, DateTimeOffset? LastSampledAt,
-    DateTimeOffset? LastReceivedAt, TrafficTotals? Totals);
+    DateTimeOffset? LastReceivedAt, TrafficTotals? Totals)
+{
+    public string? Region { get; init; }
+    public string? Ip { get; init; }
+}
 public sealed record BeeDetail(NodeInfo Node, bool Online, DateTimeOffset? LastSampledAt,
     DateTimeOffset? LastReceivedAt, TrafficTotals? Totals);
 public sealed record TotalResponse(TrafficTotals? Totals, bool Online, DateTimeOffset? LastSampledAt,
@@ -49,7 +57,11 @@ public sealed record TrafficQuotaPolicy(long? LimitBytes, string Period, int Res
 public sealed record BeeTrafficQuota(string Id, string? Name, bool Online, TrafficQuotaPolicy Quota,
     DateTimeOffset PeriodStart, DateTimeOffset PeriodEnd, long? ReceivedBytes, long? SentBytes,
     long? TotalBytes, long? RemainingBytes, bool? IsExceeded, bool HasGaps,
-    DateTimeOffset? LastSampledAt, DateTimeOffset? LastReceivedAt);
+    DateTimeOffset? LastSampledAt, DateTimeOffset? LastReceivedAt)
+{
+    public string? Region { get; init; }
+    public string? Ip { get; init; }
+}
 public sealed record TrafficQuotasResponse(DateTimeOffset AsOf, BeeTrafficQuota[] Bees);
 public sealed record OnlineInterval(DateTimeOffset From, DateTimeOffset To, string Status);
 public sealed record OnlineHistoryResponse(string Id, DateTimeOffset From, DateTimeOffset To, DateTimeOffset AsOf,

@@ -72,6 +72,11 @@ public sealed class SwaggerTests(ApiFixture fixture) : IClassFixture<ApiFixture>
         Assert.Equal("bearer", bearer.GetProperty("scheme").GetString());
         var schemas = components.GetProperty("schemas");
         Assert.True(schemas.GetProperty("BeeSummary").GetProperty("properties").TryGetProperty("lastSampledAt", out _));
+        foreach (var schema in new[] { "NodeInfo", "BeeSummary", "BeeTrafficQuota" })
+        {
+            Assert.True(schemas.GetProperty(schema).GetProperty("properties").TryGetProperty("region", out _));
+            Assert.True(schemas.GetProperty(schema).GetProperty("properties").TryGetProperty("ip", out _));
+        }
         Assert.True(schemas.GetProperty("CurrentTraffic").GetProperty("properties").TryGetProperty("downloadBitsPerSecond", out _));
         var current = paths.GetProperty("/api/v1/bees/{id}/traffic/current").GetProperty("get").GetProperty("responses");
         Assert.True(current.TryGetProperty("503", out _));

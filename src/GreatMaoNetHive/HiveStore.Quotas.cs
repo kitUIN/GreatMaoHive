@@ -50,7 +50,8 @@ public sealed partial class HiveStore
             bool? exceeded = policy.LimitBytes is { } ceiling && total is { } used ? used > ceiling : null;
             results.Add(new(bee.Id, node?.Node.Name, false,
                 new(policy.LimitBytes, policy.Period, policy.ResetDay, policy.UtcOffsetHours),
-                start, end, received, sent, total, remaining, exceeded, gaps, lastSample, node?.LastReceivedAt));
+                start, end, received, sent, total, remaining, exceeded, gaps, lastSample, node?.LastReceivedAt)
+                { Region = node?.Node.Region, Ip = node?.Node.Ip });
         }
         transaction.Commit();
         return new(now.ToUniversalTime(), results.ToArray());

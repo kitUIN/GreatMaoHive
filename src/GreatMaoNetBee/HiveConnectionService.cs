@@ -34,7 +34,8 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
         var checkpoint = store.Load();
         await protocol.SendAsync(new WireMessage { Type = "hello", Hello = new(
             new NodeInfo(options.Id, options.Name, RuntimeInformation.OSDescription, checkpoint.DataEpoch,
-                checkpoint.Counters.Select(x => x.Interface).ToArray()), store.Delivery().Ack, checkpoint.Sequence) }, stoppingToken);
+                checkpoint.Counters.Select(x => x.Interface).ToArray()) { Region = options.Region, Ip = options.Ip },
+            store.Delivery().Ack, checkpoint.Sequence) }, stoppingToken);
         using var handshake = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         handshake.CancelAfter(TimeSpan.FromSeconds(15));
         var welcome = await protocol.ReceiveAsync(handshake.Token);
