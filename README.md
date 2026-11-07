@@ -297,6 +297,46 @@ sc.exe start GreatMaoNetBee
 
 ## Linux systemd 部署
 
+### 一键安装（推荐）
+
+Linux x86_64 / glibc、已运行 systemd 的系统可直接下载安装脚本，无需安装 .NET：
+
+```sh
+curl -fL --proto '=https' https://raw.githubusercontent.com/kitUIN/GreatMaoHive/main/scripts/install-linux.sh -o install-linux.sh
+# 安装蜂巢；在蜂巢服务器上执行。
+sudo bash install-linux.sh hive
+# 安装小蜜蜂；在需要监控的服务器上执行。
+sudo bash install-linux.sh bee
+```
+
+不填写 `hive` / `bee` 时会询问安装角色。脚本从 GitHub 查询最新稳定 Release，按同一个版本下载对应 Linux 包和 SHA-256 文件，校验并验证程序能在当前系统运行后，创建 `greatmao` 服务账号、部署完整文件、注册 systemd 服务并启用开机自启。缺少 Python 3 / OpenSSL 3 等依赖时自动通过 apt-get 或 dnf 安装；其他发行版需先安装依赖。当前发布包在 Ubuntu 24.04 上构建，较旧的 glibc 系统可能无法运行，脚本会在停止原服务前报错。
+
+首次安装 Hive 会询问首个 Bee ID，并生成独立的 ReadApiKey 和 Bee Token。默认 HTTPS 模式需要已有、受客户端信任的 PFX 证书；脚本会把证书复制到 `/etc/greatmao/certificates/hive.pfx` 并设置服务读取权限。也可选择 `local-proxy` 模式，仅监听 `http://127.0.0.1:7443`；此时需自行配置支持 WebSocket 的 HTTPS 反向代理。脚本不签发证书、不修改防火墙。
+
+Hive 的密钥保存在 `/opt/greatmao/hive/appsettings.Local.json`，用 `sudo cat /opt/greatmao/hive/appsettings.Local.json` 查看。安装 Bee 时输入相同的 Bee ID、Token 和 Hive 的 `wss://域名:端口/agent` 地址；可填写名称、地区和 IP。需要多个 Bee 时，在 Hive 配置中的 `Hive.Bees` 数组添加各自不同的 ID/Token，再执行 `sudo systemctl restart greatmaonethive`。
+
+无人值守首次安装可提供完整配置文件（与上文 `appsettings.Local.json` 格式相同，Hive 须包含 `Urls`）：
+
+```sh
+sudo bash install-linux.sh hive --config /root/hive.json
+sudo bash install-linux.sh bee --config /root/bee.json
+```
+
+未指定数据库路径时，默认使用 `/var/lib/greatmao/hive/hive.db` 或 `/var/lib/greatmao/bee/bee.db`。自定义路径须符合服务的目录权限与 `ProtectHome` / `ReadWritePaths` 限制。脚本生成的配置文件权限为 `0640`，不会在安装输出中打印密钥。
+
+重复执行 `sudo bash install-linux.sh hive` / `bee` 可重新部署最新稳定版本，保留已有 `appsettings*.json`、`/etc/greatmao/*.env` 和数据库；已有配置时不能使用 `--config` 覆盖。自定义环境文件仍优先于 JSON 生效。服务启动失败时恢复本次替换的文件，并尝试恢复原先运行的服务。已有待处理自动更新时会停止安装，请先检查更新日志。
+
+安装后的服务默认继续每 6 小时自动更新，无需反复运行脚本；已有配置中的更新开关仍然生效。服务启动成功不代表 Bee 已连接到 Hive，需查看连接日志：
+
+```sh
+sudo systemctl status greatmaonethive
+sudo systemctl status greatmaonetbee
+sudo journalctl -u greatmaonethive -f
+sudo journalctl -u greatmaonetbee -f
+```
+
+### 手动安装
+
 1. 创建 `greatmao` 专用账号，将完整发布目录分别放到 `/opt/greatmao/hive`、`/opt/greatmao/bee`，给该账号安装目录的写权限，并为主程序及 `GreatMaoNetUpdater` 设置执行权限。
 2. 创建并授权 `/var/lib/greatmao/hive`、`/var/lib/greatmao/bee`；将对应 `.env.example` 复制到 `/etc/greatmao/hive.env` 或 `bee.env`，替换密钥和证书路径。密钥文件只允许管理员/服务账号读取。
 3. 将所需 `.service` 文件复制到 `/etc/systemd/system/`，执行 `systemctl daemon-reload`，然后 `systemctl enable --now greatmaonethive` 或 `greatmaonetbee`。

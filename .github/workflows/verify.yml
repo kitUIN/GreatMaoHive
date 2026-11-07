@@ -11,6 +11,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 jobs:
+  linux-installer:
+    name: Verify Linux one-command installer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installer syntax and failure recovery tests
+        run: |
+          bash -n scripts/install-linux.sh scripts/install-linux-smoke.sh
+          python3 scripts/test_install_linux.py
+      - name: Install latest release with real systemd and verify repeat installation
+        run: sudo bash scripts/install-linux-smoke.sh
   verify:
     name: Test and publish (${{ matrix.rid }})
     timeout-minutes: 25
@@ -86,7 +98,7 @@ jobs:
             tests/**/TestResults/
   release:
     name: Publish GitHub Release
-    needs: verify
+    needs: [verify, linux-installer]
     if: startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
