@@ -25,6 +25,7 @@ public static class HiveApplication
         builder.Services.AddSingleton<HiveStore>();
         builder.Services.AddSingleton<DatabaseWriter>();
         builder.Services.AddHostedService(x => x.GetRequiredService<DatabaseWriter>());
+        builder.Services.AddHostedService<OnlineHistoryService>();
         builder.Services.AddHostedService<RetentionService>();
         builder.Services.AddSingleton<BeeSessions>();
         var app = builder.Build();
@@ -58,6 +59,18 @@ public static class HiveApplication
             if (!context.WebSockets.IsWebSocketRequest) { await Results.Problem(statusCode: 400, title: "WebSocket upgrade required.").ExecuteAsync(context); return; }
             await sessions.AcceptAsync(context, credential);
         }).ExcludeFromDescription();
+        app.MapGet("/api/v1/bees/traffic/quotas", (HiveStore store, BeeSessions sessions) =>
+        {
+            var result = store.TrafficQuotas(options.Bees, DateTimeOffset.UtcNow);
+            result = result with { Bees = result.Bees.Select(bee =>
+            {
+                var session = sessions.Get(bee.Id);
+                return bee with { Online = session?.Online == true, LastReceivedAt = session?.LastReceivedAt ?? bee.LastReceivedAt };
+            }).ToArray() };
+            return Results.Json(result, ProtocolJson.Default.TrafficQuotasResponse);
+        }).WithTags("流量").WithSummary("查询所有小蜜蜂的周期额度及用量")
+            .WithDescription("包含全部已配置节点（包括离线和从未连接的节点）。额度仅供查询，不限速或阻断。周期按配置的固定 UTC 时区重置；用量为已入库历史的接收与发送字节之和，无本周期数据时为 null。hasGaps 表示本周期采集不完整，lastSampledAt 表示数据新鲜度；无法定位时间的停机补计不计入周期用量。")
+            .Produces<TrafficQuotasResponse>().ProducesProblem(400).ProducesProblem(401);
         app.MapGet("/api/v1/bees", (HiveStore store, BeeSessions sessions) => Results.Json(store.List().Select(node =>
         {
             var session = sessions.Get(node.Node.Id);
@@ -98,6 +111,20 @@ public static class HiveApplication
             catch (ArgumentException exception) { return Results.Problem(statusCode: 400, title: exception.Message); }
         }).WithTags("流量").WithSummary("查询历史流量").WithDescription("返回 UTC 对齐的完整时间桶；缺失桶的字节和速率为 null，正常无流量为 0。")
             .Produces<HistoryResponse>().ProducesProblem(400).ProducesProblem(401).ProducesProblem(404);
+        app.MapGet("/api/v1/bees/{id}/online/history", (string id, HttpContext context, HiveStore store) =>
+        {
+            if (!options.Bees.Any(x => x.Id == id) && store.Get(id) is null) return Missing();
+            if (!ParseTimestamp(context.Request.Query["from"], out var from) || !ParseTimestamp(context.Request.Query["to"], out var to))
+                return Results.Problem(statusCode: 400, title: "from and to must be ISO 8601 timestamps with a UTC offset.");
+            try
+            {
+                return Results.Json(store.OnlineHistory(id, from, to, DateTimeOffset.UtcNow, options.OnlineHistoryRetentionDays),
+                    ProtocolJson.Default.OnlineHistoryResponse);
+            }
+            catch (ArgumentException exception) { return Results.Problem(statusCode: 400, title: exception.Message); }
+        }).WithTags("节点").WithSummary("查询时间窗口内的在线记录")
+            .WithDescription("按蜂巢观测返回连续的 online/offline/unknown 区间及各状态秒数。from/to 必填，窗口最多 31 天，不允许未来时间。蜂巢停机、保留期外、未配置节点及最近尚未持久化的时间为 unknown；在线表示有效 WebSocket 会话，静默 45 秒视为离线。")
+            .Produces<OnlineHistoryResponse>().ProducesProblem(400).ProducesProblem(401).ProducesProblem(404);
         return app;
     }
 

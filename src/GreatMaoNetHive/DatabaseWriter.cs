@@ -31,12 +31,18 @@ public sealed class DatabaseWriter(HiveStore store) : BackgroundService
     }
 }
 
-public sealed class RetentionService(DatabaseWriter writer) : BackgroundService
+public sealed class RetentionService(DatabaseWriter writer, HiveOptions options) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
-        do { await writer.RunAsync(store => { store.Prune(DateTimeOffset.UtcNow); return true; }, stoppingToken); }
+        do { await writer.RunAsync(store =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            store.Prune(now);
+            store.PruneOnlineHistory(now.AddDays(-options.OnlineHistoryRetentionDays));
+            return true;
+        }, stoppingToken); }
         while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 }

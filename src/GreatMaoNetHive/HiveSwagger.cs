@@ -37,7 +37,8 @@ public static class HiveSwagger
                     foreach (var operation in item.Operations.Values)
                     {
                         operation.Security = [new OpenApiSecurityRequirement { [new OpenApiSecuritySchemeReference("Bearer", document)] = [] }];
-                        if (!path.EndsWith("/traffic/history", StringComparison.Ordinal)) continue;
+                        bool onlineHistory = path.EndsWith("/online/history", StringComparison.Ordinal);
+                        if (!onlineHistory && !path.EndsWith("/traffic/history", StringComparison.Ordinal)) continue;
                         operation.Parameters ??= [];
                         operation.Parameters.Add(new OpenApiParameter
                         {
@@ -48,9 +49,10 @@ public static class HiveSwagger
                         operation.Parameters.Add(new OpenApiParameter
                         {
                             Name = "to", In = ParameterLocation.Query, Required = true,
-                            Description = "结束时间（不含），须晚于 from，最多允许超前当前时间 5 分钟。",
+                            Description = onlineHistory ? "结束时间（不含），须晚于 from，不可晚于当前时间；窗口最多 31 天。" : "结束时间（不含），须晚于 from，最多允许超前当前时间 5 分钟。",
                             Schema = new OpenApiSchema { Type = JsonSchemaType.String, Format = "date-time" }
                         });
+                        if (onlineHistory) continue;
                         operation.Parameters.Add(new OpenApiParameter
                         {
                             Name = "step", In = ParameterLocation.Query,

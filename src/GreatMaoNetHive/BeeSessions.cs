@@ -17,6 +17,8 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
         using var protocol = new WebSocketProtocol(socket);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
         BeeSession? session = null;
+        string sessionId = Guid.NewGuid().ToString("N");
+        bool registered = false;
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
@@ -32,6 +34,10 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
             }
             if (!sessions.TryAdd(credential.Id, session)) throw new InvalidDataException("This node already has an active connection.");
             long ack = await writer.RunAsync(store => store.Register(first.Hello, DateTimeOffset.UtcNow), lifetime.Token);
+            // Record using a session-specific ID so an old connection's cleanup cannot close a replacement.
+            // The queued write is awaited without request cancellation to avoid an orphaned interval.
+            await writer.RunAsync(store => { store.OpenOnlineSession(sessionId, credential.Id, DateTimeOffset.UtcNow); return true; }, CancellationToken.None);
+            registered = true;
             await protocol.SendAsync(new WireMessage { Type = "welcome", AcknowledgedSequence = ack }, lifetime.Token);
             session.Ready = true;
             while (!lifetime.IsCancellationRequested)
@@ -40,7 +46,6 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
                 readTimeout.CancelAfter(TimeSpan.FromSeconds(45));
                 var message = await protocol.ReceiveAsync(readTimeout.Token);
                 if (message is null) break;
-                session.Touch();
                 switch (message.Type)
                 {
                     case "batch" when message.Batch is not null:
@@ -55,6 +60,8 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
                         break;
                     default: throw new InvalidDataException("Unexpected Bee message.");
                 }
+                session.Touch();
+                await writer.RunAsync(store => { store.TouchOnlineSession(sessionId, session.LastReceivedAt); return true; }, lifetime.Token);
             }
         }
         catch (Exception exception) when (exception is InvalidDataException or JsonException or WebSocketException or OperationCanceledException or Microsoft.Data.Sqlite.SqliteException)
@@ -69,11 +76,17 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
         }
         finally
         {
+            var disconnectedAt = DateTimeOffset.UtcNow;
             if (session is not null)
             {
                 session.Abort();
                 await session.DrainAsync();
                 ((ICollection<KeyValuePair<string, BeeSession>>)sessions).Remove(new(credential.Id, session));
+            }
+            if (registered)
+            {
+                try { await writer.RunAsync(store => { store.CloseOnlineSession(sessionId, disconnectedAt); return true; }, CancellationToken.None); }
+                catch (System.Threading.Channels.ChannelClosedException) { /* Host shutdown already closed observation intervals. */ }
             }
             socket.Abort();
         }

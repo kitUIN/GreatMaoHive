@@ -53,7 +53,11 @@ public sealed class SwaggerTests(ApiFixture fixture) : IClassFixture<ApiFixture>
         Assert.StartsWith("3.", root.GetProperty("openapi").GetString());
         Assert.Equal("../../", root.GetProperty("servers")[0].GetProperty("url").GetString());
         var paths = root.GetProperty("paths");
-        Assert.Equal(6, paths.EnumerateObject().Count());
+        Assert.Equal(8, paths.EnumerateObject().Count());
+        Assert.True(paths.TryGetProperty("/api/v1/bees/traffic/quotas", out _));
+        var online = paths.GetProperty("/api/v1/bees/{id}/online/history").GetProperty("get");
+        Assert.Equal(new[] { "from", "id", "to" }, online.GetProperty("parameters").EnumerateArray()
+            .Select(x => x.GetProperty("name").GetString()).OrderBy(x => x));
         Assert.False(paths.TryGetProperty("/agent", out _));
         Assert.False(paths.GetProperty("/healthz").GetProperty("get").TryGetProperty("security", out _));
         foreach (var path in paths.EnumerateObject().Where(x => x.Name.StartsWith("/api/", StringComparison.Ordinal)))

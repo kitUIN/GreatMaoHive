@@ -65,3 +65,11 @@ Windows Service 控制管理器重启和 Linux systemd 的 `ExecStopPost` 集成
 - 蜂巢 Windows Native AOT 发布成功，没有 AOT/裁剪警告。使用实际原生程序运行 `scripts/smoke.ps1`，页面、OpenAPI JSON、CSS/JavaScript、真实节点采集和 API 查询检查通过，结果在 `artifacts/verification/swagger-native/result.json`。本次沿用已有恢复测试结果，短时联调使用 `-SkipRestart`。
 - 使用独立无头 Edge 浏览器访问原生蜂巢 `/swagger`：6 个接口正常显示；通过授权弹窗输入临时查询密钥，执行 `/api/v1/bees` 获得 HTTP 200，实际请求正确携带 Bearer 头；外部网络请求 **0**，浏览器脚本错误 **0**。检查结果和截图在 `artifacts/verification/swagger-browser/`，临时进程已停止。
 - UI 使用官方 `swagger-ui-dist` 5.34.1 的内嵌资源，下载时验证 npm SHA-512，保留上游许可证。Linux AOT 与页面资源检查已包含在现有 CI 原生联调脚本中，尚未在本机执行 Linux 运行验证。
+
+## 周期额度与在线历史验证（2026-11-07）
+
+- 自包含完整测试 **81 通过、0 失败、0 跳过**，结果 `tests/GreatMaoNet.Tests/TestResults/quotas-online.trx`。新增覆盖固定时区的日/周/月边界、月末与闰年、非法配置、重放去重、跨月归属、清理与重启后统计、配置变更、未知/零用量，以及缺失数据不冒充完整用量。
+- 在线历史测试覆盖窗口裁剪、相邻区间合并、旧会话清理不干扰新会话、45 秒静默、正常停止、异常退出恢复、蜂巢停机标记未知、保留期清理和延长保留期后不误判历史。模拟旧版数据库升级，原节点数据保留。
+- HTTP/WebSocket 集成测试验证两个新接口的查询密钥鉴权、未连接节点、非法窗口/未知节点、真实连接断开持久化，以及超额后继续成功上报。Swagger 验证覆盖新增接口和查询参数，当前共 8 个 HTTP 接口。
+- 蜂巢 Windows Native AOT 发布成功，无警告/错误。`scripts/smoke.ps1` 新增两个接口的原生检查：环境变量绑定月度额度及 UTC+8 时区、超额后继续采集上报、持久化在线历史，并在杀死蜂巢后重启验证停机期间为 `unknown`、小蜜蜂断开重连有独立区间。输出 `artifacts/verification/quotas-online-native/result.json`。
+- 本轮未在 Linux 实机运行；同一联调脚本会由 Windows/Linux CI 调用。尚未推送本轮变更或发布新 Release。在线历史在本版本启用后才开始记录，不补造升级前的在线情况；周期用量只包含可归属时间的已持久化采样，不保证补全停机期间缺失的字节。

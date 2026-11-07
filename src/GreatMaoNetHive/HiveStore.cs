@@ -7,7 +7,7 @@ namespace GreatMaoNetHive;
 public sealed record StoredBee(NodeInfo Node, long Sequence, TrafficTotals? Totals,
     DateTimeOffset? LastSampledAt, DateTimeOffset? LastReceivedAt);
 
-public sealed class HiveStore : IDisposable
+public sealed partial class HiveStore : IDisposable
 {
     private readonly SqliteConnection writer;
     private readonly string connectionString;
@@ -30,7 +30,17 @@ public sealed class HiveStore : IDisposable
                 peak_rx REAL NOT NULL, peak_tx REAL NOT NULL, gap INTEGER NOT NULL, interfaces TEXT NOT NULL,
                 PRIMARY KEY(node,step,start));
             CREATE INDEX IF NOT EXISTS ix_buckets_retention ON buckets(step,start);
-            PRAGMA user_version=1;
+            CREATE TABLE IF NOT EXISTS observation_runs(
+                id TEXT PRIMARY KEY, start INTEGER NOT NULL, last_seen INTEGER NOT NULL, end INTEGER);
+            CREATE TABLE IF NOT EXISTS observation_bees(
+                run TEXT NOT NULL REFERENCES observation_runs(id) ON DELETE CASCADE, node TEXT NOT NULL,
+                PRIMARY KEY(run,node));
+            CREATE INDEX IF NOT EXISTS ix_observation_bees_node ON observation_bees(node,run);
+            CREATE TABLE IF NOT EXISTS online_sessions(
+                id TEXT PRIMARY KEY, node TEXT NOT NULL, run TEXT NOT NULL REFERENCES observation_runs(id) ON DELETE CASCADE,
+                start INTEGER NOT NULL, last_seen INTEGER NOT NULL, end INTEGER);
+            CREATE INDEX IF NOT EXISTS ix_online_sessions_node ON online_sessions(node,start);
+            PRAGMA user_version=2;
             """;
         command.ExecuteNonQuery();
     }

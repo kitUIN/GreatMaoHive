@@ -174,7 +174,9 @@ git push origin v0.1.0
 |---|---|
 | `GET /healthz` | 存活检查，不依赖节点在线 |
 | `GET /api/v1/bees` | 已注册节点及在线状态、累计摘要 |
+| `GET /api/v1/bees/traffic/quotas` | 所有已配置节点的周期额度、本周期已观测流量、剩余额度和超额标记 |
 | `GET /api/v1/bees/{id}` | 名称、系统、当前统计网卡、链路速率、最后采集/接收时间 |
+| `GET /api/v1/bees/{id}/online/history?from=...&to=...` | 指定窗口的 online/offline/unknown 区间和时长 |
 | `GET /api/v1/bees/{id}/traffic/total` | 自监控启用以来累计；离线仍可查询 |
 | `GET /api/v1/bees/{id}/traffic/current` | 请求后下一次有效采样；最多等待 3 秒 |
 | `GET /api/v1/bees/{id}/traffic/history?from=...&to=...&step=auto` | 折线图时间序列 |
@@ -199,6 +201,78 @@ curl -G -H "Authorization: Bearer $HIVE_READ_KEY" \
 历史点包含 `receivedBytes/sentBytes`、`downloadBitsPerSecond/uploadBitsPerSecond`、`peakDownloadBitsPerSecond/peakUploadBitsPerSecond`、`coverageSeconds/hasGap` 及网卡元数据。多条采样合并成同一桶时，网卡元数据为最后入账记录的值。
 
 错误采用 `application/problem+json`：`400` 参数/HTTPS 要求；`401` 凭证不正确；`404` 节点未知；`503` 节点离线、已断开或无可用网卡采样；`504` 实时采样超时。离线或超时时不返回伪装成实时值的缓存。
+
+## 周期额度与在线历史
+
+### 周期流量额度（仅查询）
+
+在蜂巢的 `appsettings.Local.json` 中为每项 `Hive:Bees` 配置 `Quota`，重启蜂巢生效。例如每月按香港时间重置 1 TiB 的上传与下载合计额度：
+
+```json
+{
+  "Hive": {
+    "Bees": [
+      {
+        "Id": "bee-01",
+        "Token": "填写该节点现有的独立随机密钥，至少32字符",
+        "Quota": {
+          "LimitBytes": 1099511627776,
+          "Period": "monthly",
+          "ResetDay": 1,
+          "UtcOffsetHours": 8
+        }
+      }
+    ]
+  }
+}
+```
+
+| 配置 | 含义 |
+|---|---|
+| `LimitBytes` | 非负整数，单位字节；`null` 表示未设置上限，`0` 表示零额度 |
+| `Period` | `daily`、`weekly`、`monthly`；默认 `monthly` |
+| `ResetDay` | 每月第 1～31 日；短月没有对应日期时取月末，下月恢复原日期。每周为 1（周一）～7（周日）；每日必须为 1 |
+| `UtcOffsetHours` | 固定整小时时区偏移，-12～14，默认 0（UTC）；香港为 8。不自动跟随夏令时 |
+
+每个周期在当地时间 00:00 开始，区间左闭右开。无需定时清空数据库，查询按当前周期选择数据；重启不会清零，修改额度或周期也能按已有数据重新统计。此设置**不会限速、断网或拒绝小蜜蜂上传**，也不会修改终身累计流量。
+
+`GET /api/v1/bees/traffic/quotas` 需携带查询 API Key，返回 `asOf` 和 `bees` 数组，包含所有当前配置的节点，包括离线、从未连接和未设上限的节点。每项包含：
+
+- `id/name/online`、`quota` 配置、UTC `periodStart/periodEnd`；
+- 本周期 `receivedBytes/sentBytes/totalBytes`，其中总量为上传与下载之和；
+- `remainingBytes`（最小为 0）、`isExceeded`（总量严格大于额度时为 true）；
+- `hasGaps`、`lastSampledAt/lastReceivedAt`，用于判断采集完整性及新鲜度。
+
+本周期没有可用采样时，用量、剩余额度和超额标记为 `null`，不会伪装成零用量；确有采样但没有流量时为 `0`。未设上限时，剩余额度和超额标记为 `null`，仍统计用量。
+
+统计从已有的持久化小时汇总读取，每条采样按其起始时间归属周期，重复补传不重复计数；额度周期边界与小时汇总对齐。`hasGaps` 表示周期开始至最后采样时间存在缺口或仅覆盖部分周期，**不表示节点当前在线或数据实时**，应同时检查 `online` 和采样时间。停机补计、丢弃的补传历史及时间错误中无法分配到具体时段的字节只保留在终身累计，不凭空分配到本周期；因此有缺口时该用量是已知采样总和，实际用量可能更高，剩余额度不能作为准确账单。正常周期切换和历史清理不影响当前日/周/月周期。
+
+```sh
+curl -H "Authorization: Bearer $HIVE_READ_KEY" https://hive.example.com:7443/api/v1/bees/traffic/quotas
+```
+
+### 在线历史与时间窗口查询
+
+`GET /api/v1/bees/{id}/online/history?from=...&to=...` 返回指定节点在时间窗口内的连续区间 `intervals`（`from/to/status`），以及 `onlineSeconds/offlineSeconds/unknownSeconds`。需要查询 API Key；两个时间参数须为带时区的 ISO 8601 格式，窗口最多 31 天，`to` 不得晚于当前时间。返回 UTC、毫秒精度、左闭右开的区间，区间无重叠且覆盖整个请求窗口；相邻同状态区间会合并。
+
+| 状态 | 含义 |
+|---|---|
+| `online` | 蜂巢记录到已鉴权的 WebSocket 会话，静默不足 45 秒；这表示与蜂巢的连接状态，不代表整台服务器或全部网络可用 |
+| `offline` | 蜂巢在运行且配置中包含该节点，但没有有效会话；从未连接的已配置节点也可查询 |
+| `unknown` | 蜂巢自身停机、尚未启用本功能、当时未配置该节点、已过保留期，或最近尚未持久化观测的时间 |
+
+蜂巢每 5 秒持久化一次观测进度，连接和有效消息也会推进进度。正常断开会关闭对应会话；异常退出后，下次启动只恢复至最后持久化的观测点，**不会把蜂巢停机误报成小蜜蜂离线**，也不会向前推测为持续在线。窗口末端可能有约 5 秒 `unknown`，应以返回的区间为准。每个新连接使用独立会话标识，旧连接清理不会结束新连接。
+
+在线记录默认保留 90 天，可配置 `Hive:OnlineHistoryRetentionDays`（1～730）并重启生效；过期窗口仍可查询，但过期部分为 `unknown`。窗口中会话/观测记录过多（任一超过 10,000 条）返回 400，需缩小窗口。旧数据库启动时自动新增记录表，保留原有流量数据；升级前没有记录的在线历史无法补造。离线或已从配置移除、但数据库仍有记录的节点可以查询其历史。
+
+```sh
+curl -G -H "Authorization: Bearer $HIVE_READ_KEY" \
+  --data-urlencode 'from=2026-11-07T00:00:00+08:00' \
+  --data-urlencode 'to=2026-11-07T12:00:00+08:00' \
+  https://hive.example.com:7443/api/v1/bees/bee-01/online/history
+```
+
+以上两个接口均已加入内置 Swagger，可直接授权调试。
 
 ## Windows Service 部署
 

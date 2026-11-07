@@ -56,6 +56,9 @@ $hiveVariables = @{
     Hive__Bees__0__Id = 'smoke-bee'
     Hive__Bees__0__Token = $beeKey
     Hive__AllowInsecureTransport = 'true'
+    Hive__Bees__0__Quota__LimitBytes = '1'
+    Hive__Bees__0__Quota__Period = 'monthly'
+    Hive__Bees__0__Quota__UtcOffsetHours = '8'
 }
 $beeVariables = @{
     Updates__Enabled = 'false'
@@ -132,13 +135,23 @@ try {
     $to = [Uri]::EscapeDataString([datetime]::UtcNow.AddSeconds(5).ToString('O'))
     $history = Invoke-RestMethod "$baseUrl/api/v1/bees/smoke-bee/traffic/history?from=$from&to=$to&step=5s" -Headers $headers
     if ($history.points.Count -eq 0) { throw 'History is empty.' }
+    $quotas = Invoke-RestMethod "$baseUrl/api/v1/bees/traffic/quotas" -Headers $headers
+    $quota = @($quotas.bees | Where-Object { $_.id -eq 'smoke-bee' })
+    if ($quota.Count -ne 1 -or $quota[0].quota.limitBytes -ne 1 -or $quota[0].quota.utcOffsetHours -ne 8 -or $quota[0].totalBytes -le 0 -or -not $quota[0].isExceeded) {
+        throw 'Period quota configuration or traffic aggregation failed.'
+    }
+    $onlineTo = [Uri]::EscapeDataString([datetimeoffset]::UtcNow.ToString('O'))
+    $onlineHistory = Invoke-RestMethod "$baseUrl/api/v1/bees/smoke-bee/online/history?from=$from&to=$onlineTo" -Headers $headers
+    if ($onlineHistory.onlineSeconds -le 0 -or @($onlineHistory.intervals).Count -eq 0) { throw 'Online history was not persisted.' }
+    if (-not $SkipRestart -and $onlineHistory.unknownSeconds -le 0) { throw 'Hive downtime should be unknown in online history.' }
     $report = [ordered]@{
         passed = $true; capturedAt = [datetime]::UtcNow.ToString('O'); hiveExecutable = $hiveExecutable
         beeExecutable = $beeExecutable; platform = [Runtime.InteropServices.RuntimeInformation]::OSDescription
         warmupSeconds = $WarmupSeconds; observationSeconds = $ObservationSeconds; beeCpuPercentOfOneCore = [Math]::Round($cpuCorePercent, 3)
         beeWorkingSetMiB = [Math]::Round($workingSetMiB, 2); current = $current
         finalTotals = $latest.totals; interfaces = $latest.node.interfaces; historyPoints = $history.points.Count
-        restartChecks = (-not $SkipRestart); swagger = $true; transfer = $transfer; note = 'Short smoke measurement, not a production performance benchmark.'
+        restartChecks = (-not $SkipRestart); swagger = $true; quota = $quota[0]; onlineHistory = $onlineHistory
+        transfer = $transfer; note = 'Short smoke measurement, not a production performance benchmark.'
     }
     $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $resultDirectory 'result.json') -Encoding utf8
     $report | ConvertTo-Json -Depth 12
