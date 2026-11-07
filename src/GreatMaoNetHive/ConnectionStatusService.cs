@@ -8,10 +8,7 @@ public sealed class ConnectionStatusService(HiveOptions options, BeeSessions ses
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(10));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            var snapshot = options.Bees
-                .Select(bee => new { bee.Id, Online = sessions.Get(bee.Id)?.Online == true })
-                .OrderBy(bee => bee.Id, StringComparer.Ordinal)
-                .ToArray();
+            var snapshot = sessions.Snapshot(options.Bees.Select(bee => bee.Id));
             var online = snapshot.Where(bee => bee.Online).Select(bee => bee.Id).ToArray();
             var offline = snapshot.Where(bee => !bee.Online).Select(bee => bee.Id).ToArray();
             logger.LogInformation(

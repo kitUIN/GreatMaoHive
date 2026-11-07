@@ -9,14 +9,19 @@ public sealed class ReleaseClient(HttpClient http, UpdateOptions options, string
 {
     public const long MaxPackageBytes = 512L * 1024 * 1024;
 
-    public async Task<AvailableUpdate?> CheckAsync(string currentVersion, CancellationToken token)
+    public async Task<AvailableUpdate?> CheckAsync(string currentVersion, CancellationToken token, bool requireAccessibleRelease = false)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{options.Repository}/releases/latest");
         request.Headers.UserAgent.ParseAdd($"{application}/1.0");
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
         request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            if (requireAccessibleRelease)
+                throw new HttpRequestException("Latest release is unavailable (HTTP 404): the repository may be private, missing, or have no published release. Runtime update commands require a public repository.", null, response.StatusCode);
+            return null;
+        }
         response.EnsureSuccessStatusCode();
         using var buffer = new MemoryStream();
         await CopyBoundedAsync(await response.Content.ReadAsStreamAsync(token), buffer, 1024 * 1024, token);

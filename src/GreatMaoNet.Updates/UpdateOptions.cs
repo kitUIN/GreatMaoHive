@@ -22,7 +22,7 @@ public sealed partial class UpdateOptions
     }
 
     public static string CurrentVersion => (Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-        .InformationalVersion ?? "0.1.0").Split('+')[0];
+        .InformationalVersion ?? "0.2.0").Split('+')[0];
 
     public static string Runtime => RuntimeInformation.ProcessArchitecture == Architecture.X64
         ? OperatingSystem.IsWindows() ? "win-x64" : OperatingSystem.IsLinux() ? "linux-x64" : throw new PlatformNotSupportedException()

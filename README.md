@@ -44,11 +44,11 @@ Windows AOT 需要 Visual Studio 的 **使用 C++ 的桌面开发**工作负载�
 推送 `vMAJOR.MINOR.PATCH` 稳定版本标签后，同一工作流会将标签版本写入二进制；仅当 Windows/Linux 全部测试、AOT 发布和联调通过，才创建 GitHub Release。上传全部四个包和四个校验文件后才公开草稿，避免客户端发现不完整的 Release。已公开的版本不能覆盖；修复应使用新标签。普通分支推送和 PR 只验证，不创建 Release。
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-本地带版本发布：`./scripts/publish.ps1 -Runtime win-x64 -Version 0.1.0`，随后 `./scripts/package.ps1 -Runtime win-x64`。目前只发布稳定版，不支持预发布标签。首次部署 Linux ZIP 解压后需执行 `chmod +x GreatMaoNetHive GreatMaoNetUpdater`（蜜蜂目录将 Hive 改为 Bee）；后续自动更新会设置执行权限。
+本地带版本发布：`./scripts/publish.ps1 -Runtime win-x64 -Version 0.2.0`，随后 `./scripts/package.ps1 -Runtime win-x64`。目前只发布稳定版，不支持预发布标签。首次部署 Linux ZIP 解压后需执行 `chmod +x GreatMaoNetHive GreatMaoNetUpdater`（蜜蜂目录将 Hive 改为 Bee）；后续自动更新会设置执行权限。
 
 ### 自动更新
 
@@ -82,6 +82,23 @@ git push origin v0.1.0
 更新前的文件保存在安装目录 `.update-backup/`；更新记录保存在更新目录 `updater.log`、`last-update.json`。文件替换失败会还原已改动文件；控制台新进程在启动后 3 秒内退出也会回退。Windows 服务启动请求失败时回退并尝试启动旧版；systemd 负责在更新步骤结束后重启。**不提供运行一段时间后的健康检查回滚或数据库迁移回滚**。失败版本记录为 `failed-<版本>.txt`，防止反复停服；排查后删除对应失败标记可重试。残留 `pending.json` 会阻止新更新，应先检查日志和备份再处理。备份和下载包保留供排查，确认升级正常后可清理旧版本，勿删除正在使用的更新目录。
 
 服务账号必须拥有安装目录和更新目录的写权限；这些目录应仅允许管理员和服务账号写入。Windows Service 使用上述默认服务名，并要求服务账号有启动自身服务的权限（默认 LocalSystem 具备）；更新前会预检查权限。更新依赖完整发布包中的 `GreatMaoNetUpdater`，不能只部署主可执行文件。更新过程会短暂中断监控，蜜蜂使用现有检查点与补传机制恢复。
+
+## 运行中的控制台命令
+
+直接在终端运行 Bee / Hive 后，可输入以下命令并按 Enter；启动时会显示 `Console commands ready` 提示，采集和 HTTP 服务继续在后台运行。
+
+| 命令 | 功能 |
+|---|---|
+| `help` / `?` | 显示可用命令 |
+| `status` / `connections` | Bee 显示连接中、已连接、已超时或已断开及最近连接/接收时间；Hive 显示在线/总数量、每只已配置 Bee 的状态和当前连接最后接收时间 |
+| `version` | 显示当前程序版本 |
+| `check-update` | 立即检查最新稳定版本，不下载、不重启 |
+| `download-update` | 检查并下载完整包，校验 SHA-256，不安装、不重启 |
+| `exit` / `quit` | 正常停止当前程序；也可使用 Ctrl+C |
+
+命令不区分大小写。命令结果直接输出到控制台，不受日志级别过滤。手动检查不受 `Updates.Enabled` 自动更新开关限制；下载与自动更新共用文件锁，已有待安装更新时会提示处理。网络检查和下载期间仍继续采集/提供 HTTP 服务，控制台命令按输入顺序执行；Ctrl+C 可取消操作并退出。仓库已公开，检查和下载更新无需 GitHub Token。GitHub 返回 404 时会明确提示仓库或 Release 不可访问，不会误报“已是最新版本”。
+
+systemd / Windows Service 模式自动关闭交互命令；`systemctl status` / `journalctl` 用于查看服务状态和日志。普通运行时也可通过 `Console__Enabled=false` 关闭命令输入。标准输入被重定向时默认关闭；测试或管道操作可显式指定 `--Console:Enabled true`，输入结束只关闭命令读取，不会停止监控。
 
 ## 配置与首次运行
 
@@ -299,24 +316,7 @@ sc.exe start GreatMaoNetBee
 
 ### 一键安装（推荐）
 
-Linux x86_64 / glibc、已运行 systemd 的系统可直接下载安装脚本，无需安装 .NET：
-
-**私有仓库：**当前仓库为私有，下载脚本和 Release 都需要对本仓库拥有 `Contents: read` 权限的 GitHub Token。以下交互输入不会回显 Token，也不会把 Token 写入配置文件：
-
-```sh
-read -rsp 'GitHub Token: ' GH_TOKEN; echo
-export GH_TOKEN
-curl -fL --proto '=https' -H "Authorization: Bearer $GH_TOKEN" \
-  -H 'Accept: application/vnd.github.raw+json' \
-  https://api.github.com/repos/kitUIN/GreatMaoHive/contents/scripts/install-linux.sh \
-  -o install-linux.sh
-sudo --preserve-env=GH_TOKEN bash install-linux.sh hive  # 蜂巢服务器
-# 或在需要监控的服务器上执行：
-sudo --preserve-env=GH_TOKEN bash install-linux.sh bee
-unset GH_TOKEN
-```
-
-**公开仓库：**如果仓库已设为公开，可以直接匿名下载：
+Linux x86_64 / glibc、已运行 systemd 的系统可直接下载安装脚本，无需安装 .NET。仓库和 Release 已公开，下载及自动更新均无需 GitHub 账号或 Token：
 
 ```sh
 curl -fL --proto '=https' https://raw.githubusercontent.com/kitUIN/GreatMaoHive/main/scripts/install-linux.sh -o install-linux.sh
@@ -343,7 +343,7 @@ sudo bash install-linux.sh bee --config /root/bee.json
 
 重复执行 `sudo bash install-linux.sh hive` / `bee` 可重新部署最新稳定版本，保留已有 `appsettings*.json`、`/etc/greatmao/*.env` 和数据库；已有配置时不能使用 `--config` 覆盖。自定义环境文件仍优先于 JSON 生效。服务启动失败时恢复本次替换的文件，并尝试恢复原先运行的服务。已有待处理自动更新时会停止安装，请先检查更新日志。
 
-公开仓库下，安装后的服务默认继续每 6 小时自动更新；已有配置中的更新开关仍然生效。**私有仓库的 Token 仅用于本次安装，当前应用后台更新不支持 GitHub 凭据，因此需携带 `GH_TOKEN` 重跑脚本来升级。**服务启动成功不代表 Bee 已连接到 Hive，需查看连接日志：
+安装后的服务默认在启动后检查更新，并每 6 小时自动检查、下载、校验和重启到新版本；已有配置中的更新开关仍然生效。已部署的 0.1.x 完整发布包也能从公开仓库获取更新，不需要重新安装或配置 Token。服务启动成功不代表 Bee 已连接到 Hive，需查看连接日志：
 
 ```sh
 sudo systemctl status greatmaonethive

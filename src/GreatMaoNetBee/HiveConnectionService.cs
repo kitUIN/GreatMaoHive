@@ -4,7 +4,7 @@ using GreatMaoNet.Contracts;
 
 namespace GreatMaoNetBee;
 
-public sealed class HiveConnectionService(BeeOptions options, BeeStore store, SamplingService sampling,
+public sealed class HiveConnectionService(BeeOptions options, BeeStore store, SamplingService sampling, BeeConnectionState connection,
     ILogger<HiveConnectionService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -13,10 +13,12 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
         while (!stoppingToken.IsCancellationRequested)
         {
             var started = DateTimeOffset.UtcNow;
+            connection.Connecting();
             try { await ConnectAsync(stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception) when (exception is WebSocketException or IOException or OperationCanceledException or TimeoutException or System.Text.Json.JsonException)
             { logger.LogWarning("Hive connection interrupted: {Message}", exception.Message); }
+            finally { connection.Disconnected(); }
             if (DateTimeOffset.UtcNow - started > TimeSpan.FromSeconds(60)) attempt = 0;
             double delay = Math.Min(60, Math.Pow(2, Math.Min(attempt++, 6))) + Random.Shared.NextDouble();
             await Task.Delay(TimeSpan.FromSeconds(delay), stoppingToken);
@@ -44,6 +46,7 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
         if (welcome.AcknowledgedSequence is not long initialAck || initialAck < store.Delivery().Ack)
             throw new InvalidDataException("Hive acknowledgement moved backwards; restore the Hive database.");
         store.Acknowledge(initialAck);
+        connection.Connected();
         logger.LogInformation("Connected to Hive as {BeeId}", options.Id);
 
         using var session = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
@@ -54,6 +57,7 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
         try { await await Task.WhenAny(receive, upload, heartbeat); }
         finally
         {
+            connection.Disconnected();
             await session.CancelAsync();
             socket.Abort();
             try { await Task.WhenAll(receive, upload, heartbeat); }
@@ -67,6 +71,7 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(session.Token);
                 timeout.CancelAfter(TimeSpan.FromSeconds(45));
                 var message = await protocol.ReceiveAsync(timeout.Token) ?? throw new IOException("Hive closed connection.");
+                connection.Received();
                 switch (message.Type)
                 {
                     case "ack" when message.AcknowledgedSequence is long ack:

@@ -21,10 +21,8 @@ jobs:
         run: |
           bash -n scripts/install-linux.sh scripts/install-linux-smoke.sh
           python3 scripts/test_install_linux.py
-      - name: Install latest release with real systemd and verify repeat installation
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: sudo --preserve-env=GH_TOKEN bash scripts/install-linux-smoke.sh
+      - name: Install public release without credentials and verify repeat installation
+        run: sudo env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/install-linux-smoke.sh
   verify:
     name: Test and publish (${{ matrix.rid }})
     timeout-minutes: 25
@@ -51,7 +49,7 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          $version = '0.1.0'
+          $version = '0.2.0'
           if ($env:REF_TYPE -eq 'tag') {
             if ($env:REF_NAME -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
               throw 'Release tags must be vMAJOR.MINOR.PATCH (stable releases only).'
@@ -80,6 +78,9 @@ jobs:
       - name: Native updater replacement and restart test
         shell: pwsh
         run: ./scripts/update-smoke.ps1 -Runtime '${{ matrix.rid }}'
+      - name: Native console command smoke test
+        shell: pwsh
+        run: ./scripts/console-smoke.ps1 -HivePath 'artifacts/publish/GreatMaoNetHive/${{ matrix.rid }}/GreatMaoNetHive${{ matrix.suffix }}' -BeePath 'artifacts/publish/GreatMaoNetBee/${{ matrix.rid }}/GreatMaoNetBee${{ matrix.suffix }}'
       - name: Package native applications
         shell: pwsh
         run: ./scripts/package.ps1 -Runtime '${{ matrix.rid }}'

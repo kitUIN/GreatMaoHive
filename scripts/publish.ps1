@@ -1,6 +1,6 @@
 param(
     [ValidateSet('win-x64','linux-x64')][string]$Runtime = 'win-x64',
-    [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')][string]$Version = '0.1.0'
+    [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')][string]$Version = '0.2.0'
 )
 $ErrorActionPreference = 'Stop'
 dotnet publish src/GreatMaoNetUpdater/GreatMaoNetUpdater.csproj -c Release -r $Runtime "-p:Version=$Version" -o "artifacts/publish/GreatMaoNetUpdater/$Runtime"

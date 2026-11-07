@@ -10,6 +10,11 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
 {
     private readonly ConcurrentDictionary<string, BeeSession> sessions = new(StringComparer.Ordinal);
     public BeeSession? Get(string id) => sessions.GetValueOrDefault(id);
+    public BeeConnectionInfo[] Snapshot(IEnumerable<string> ids) => ids.Order(StringComparer.Ordinal).Select(id =>
+    {
+        var session = Get(id);
+        return new BeeConnectionInfo(id, session?.Online == true, session?.LastReceivedAt);
+    }).ToArray();
 
     public async Task AcceptAsync(HttpContext context, BeeCredential credential)
     {
@@ -93,6 +98,8 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
         }
     }
 }
+
+public sealed record BeeConnectionInfo(string Id, bool Online, DateTimeOffset? LastReceivedAt);
 
 public sealed class BeeSession(WebSocketProtocol protocol, WebSocket socket, CancellationTokenSource lifetime)
 {

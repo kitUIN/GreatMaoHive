@@ -15,6 +15,8 @@ public static class UpdateRegistration
         options.Validate();
         options.DownloadDirectory = Path.GetFullPath(options.DownloadDirectory, AppContext.BaseDirectory);
         services.AddSingleton(options);
+        services.AddSingleton<IReleaseCommands>(_ => new ReleaseCommands(options, application,
+            new HttpClient { Timeout = TimeSpan.FromMinutes(10) }));
         services.AddHostedService(provider => new UpdateService(options, application, windowsService,
             provider.GetRequiredService<IHostApplicationLifetime>(), provider.GetRequiredService<ILogger<UpdateService>>()));
     }
@@ -31,23 +33,9 @@ public static class UpdateRegistration
         var options = new UpdateOptions();
         configuration.GetSection("Updates").Bind(options);
         options.Validate();
-        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(15));
-        var client = new ReleaseClient(http, options, application, UpdateOptions.Runtime);
-        var update = await client.CheckAsync(UpdateOptions.CurrentVersion, timeout.Token);
-        if (update is null) Console.WriteLine($"{application} {UpdateOptions.CurrentVersion}: no newer stable release.");
-        else
-        {
-            Console.WriteLine($"{application}: {UpdateOptions.CurrentVersion} -> {update.Version}");
-            if (download)
-            {
-                string directory = Path.GetFullPath(options.DownloadDirectory, AppContext.BaseDirectory);
-                Directory.CreateDirectory(directory);
-                string path = Path.Combine(directory, $"{update.Version}-{update.Package.Name}");
-                await client.DownloadAsync(update, path, timeout.Token);
-                Console.WriteLine($"Downloaded and SHA-256 verified: {path}");
-            }
-        }
+        using var commands = new ReleaseCommands(options, application, new HttpClient { Timeout = TimeSpan.FromMinutes(10) });
+        await commands.CheckAsync(UpdateOptions.CurrentVersion, download, Console.Out, timeout.Token);
         return true;
     }
 }

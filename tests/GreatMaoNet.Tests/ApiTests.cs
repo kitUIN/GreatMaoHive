@@ -71,6 +71,8 @@ public sealed class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
         var batch = new WireMessage { Type = "batch", Batch = new([TestData.Record(1)], 0) };
         await protocol.SendAsync(batch, token);
         Assert.Equal(1, (await protocol.ReceiveAsync(token))!.AcknowledgedSequence);
+        var consoleStatus = fixture.Application.Services.GetRequiredService<GreatMaoNet.Updates.IConsoleStatusProvider>();
+        Assert.Contains(consoleStatus.GetStatus(), line => line.Contains("bee-01: online", StringComparison.Ordinal));
         await protocol.SendAsync(batch, token);
         Assert.Equal(1, (await protocol.ReceiveAsync(token))!.AcknowledgedSequence);
         var totalJson = await fixture.Client.GetStringAsync("/api/v1/bees/bee-01/traffic/total", token);
@@ -101,6 +103,7 @@ public sealed class ApiTests(ApiFixture fixture) : IClassFixture<ApiFixture>
         for (int i = 0; i < 100 && fixture.Application.Services.GetRequiredService<BeeSessions>().Get("bee-01") is not null; i++)
             await Task.Delay(20, token);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, (await fixture.Client.GetAsync("/api/v1/bees/bee-01/traffic/current", token)).StatusCode);
+        Assert.Contains(consoleStatus.GetStatus(), line => line.Contains("bee-01: offline", StringComparison.Ordinal));
         Assert.Equal(HttpStatusCode.OK, (await fixture.Client.GetAsync("/api/v1/bees/bee-01/traffic/total", token)).StatusCode);
         await AssertMetadataAsync();
 

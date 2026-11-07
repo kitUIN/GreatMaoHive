@@ -32,5 +32,8 @@ builder.Services.AddSingleton<BeeStore>();
 builder.Services.AddSingleton<ICounterSource, NetworkCounterSource>();
 builder.Services.AddSingleton<SamplingService>();
 builder.Services.AddHostedService(x => x.GetRequiredService<SamplingService>());
+builder.Services.AddSingleton<BeeConnectionState>();
 builder.Services.AddHostedService<HiveConnectionService>();
+builder.Services.AddSingleton<IConsoleStatusProvider, BeeConsoleStatus>();
+builder.Services.AddConsoleCommands(builder.Configuration, "GreatMaoNetBee", Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService());
 await builder.Build().RunAsync();

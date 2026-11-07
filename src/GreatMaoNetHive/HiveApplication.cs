@@ -29,6 +29,8 @@ public static class HiveApplication
         builder.Services.AddHostedService<RetentionService>();
         builder.Services.AddSingleton<BeeSessions>();
         builder.Services.AddHostedService<ConnectionStatusService>();
+        builder.Services.AddSingleton<IConsoleStatusProvider, HiveConsoleStatus>();
+        builder.Services.AddConsoleCommands(builder.Configuration, "GreatMaoNetHive", Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService());
         var app = builder.Build();
         app.UseExceptionHandler();
         app.UseStatusCodePages();
