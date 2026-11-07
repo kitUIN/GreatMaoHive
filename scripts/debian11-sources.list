@@ -1,0 +1,4 @@
+# Debian 11 has moved to the signed Debian archive. Only these test/build
+# containers use this list; the installer never replaces the server's sources.
+deb [check-valid-until=no] http://archive.debian.org/debian bullseye main
+deb [check-valid-until=no] http://archive.debian.org/debian-security bullseye-security main

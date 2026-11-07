@@ -66,6 +66,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           docker run --rm -v "$PWD:/source" -w /source debian:bullseye-slim bash -ec '
+            cp scripts/debian11-sources.list /etc/apt/sources.list
             apt-get update
             apt-get install -y --no-install-recommends python3 ca-certificates libssl1.1 zlib1g openssl
             python3 scripts/test_install_linux.py

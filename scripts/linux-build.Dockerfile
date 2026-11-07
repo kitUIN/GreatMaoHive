@@ -1,6 +1,7 @@
 # Build every native component against Debian 11's glibc 2.31 baseline.
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS sdk
 FROM debian:bullseye-slim AS build
+COPY scripts/debian11-sources.list /etc/apt/sources.list
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates clang zlib1g-dev libicu67 libssl1.1 curl unzip python3 \
     && rm -rf /var/lib/apt/lists/*
