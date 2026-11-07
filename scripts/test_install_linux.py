@@ -6,6 +6,7 @@ import stat
 import subprocess
 import tempfile
 import types
+import urllib.request
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -80,7 +81,8 @@ class InstallerTests(unittest.TestCase):
         release = {"tag_name": "v0.1.1", "draft": False, "prerelease": False, "assets": []}
         for suffix in (".zip", ".zip.sha256"):
             name = "GreatMaoNetBee-linux-x64" + suffix
-            release["assets"].append({"name": name, "size": 100,
+            release["assets"].append({"name": name, "size": 100, "id": 123,
+                "url": "https://api.github.com/repos/kitUIN/GreatMaoHive/releases/assets/123",
                 "browser_download_url": "https://github.com/kitUIN/GreatMaoHive/releases/download/v0.1.1/" + name})
         self.assertEqual(installer.release_assets(release, "GreatMaoNetBee")[0], "0.1.1")
         release["assets"][0]["browser_download_url"] = "https://example.com/evil.zip"
@@ -89,6 +91,15 @@ class InstallerTests(unittest.TestCase):
         for field, value in (("draft", True), ("prerelease", True), ("tag_name", "v1.0.0-beta")):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 installer.release_assets(dict(release, **{field: value}), "GreatMaoNetBee")
+
+    def test_asset_redirect_does_not_forward_github_credentials(self):
+        request = urllib.request.Request("https://api.github.com/repos/kitUIN/GreatMaoHive/releases/assets/123",
+                                         headers={"Authorization": "Bearer test-secret"})
+        redirected = installer.SafeRedirect().redirect_request(request, None, 302, "Found", {},
+                                                               "https://release-assets.githubusercontent.com/file")
+        self.assertIsNone(redirected.get_header("Authorization"))
+        with self.assertRaises(ValueError):
+            installer.SafeRedirect().redirect_request(request, None, 302, "Found", {}, "http://example.com/file")
 
     def test_config_credentials_and_plaintext_opt_in(self):
         config = {"Bee": {"Id": "bee-01", "Token": "b" * 32, "HiveUrl": "wss://hive.example/agent"}}

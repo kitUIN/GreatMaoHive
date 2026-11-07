@@ -301,6 +301,23 @@ sc.exe start GreatMaoNetBee
 
 Linux x86_64 / glibc、已运行 systemd 的系统可直接下载安装脚本，无需安装 .NET：
 
+**私有仓库：**当前仓库为私有，下载脚本和 Release 都需要对本仓库拥有 `Contents: read` 权限的 GitHub Token。以下交互输入不会回显 Token，也不会把 Token 写入配置文件：
+
+```sh
+read -rsp 'GitHub Token: ' GH_TOKEN; echo
+export GH_TOKEN
+curl -fL --proto '=https' -H "Authorization: Bearer $GH_TOKEN" \
+  -H 'Accept: application/vnd.github.raw+json' \
+  https://api.github.com/repos/kitUIN/GreatMaoHive/contents/scripts/install-linux.sh \
+  -o install-linux.sh
+sudo --preserve-env=GH_TOKEN bash install-linux.sh hive  # 蜂巢服务器
+# 或在需要监控的服务器上执行：
+sudo --preserve-env=GH_TOKEN bash install-linux.sh bee
+unset GH_TOKEN
+```
+
+**公开仓库：**如果仓库已设为公开，可以直接匿名下载：
+
 ```sh
 curl -fL --proto '=https' https://raw.githubusercontent.com/kitUIN/GreatMaoHive/main/scripts/install-linux.sh -o install-linux.sh
 # 安装蜂巢；在蜂巢服务器上执行。
@@ -326,7 +343,7 @@ sudo bash install-linux.sh bee --config /root/bee.json
 
 重复执行 `sudo bash install-linux.sh hive` / `bee` 可重新部署最新稳定版本，保留已有 `appsettings*.json`、`/etc/greatmao/*.env` 和数据库；已有配置时不能使用 `--config` 覆盖。自定义环境文件仍优先于 JSON 生效。服务启动失败时恢复本次替换的文件，并尝试恢复原先运行的服务。已有待处理自动更新时会停止安装，请先检查更新日志。
 
-安装后的服务默认继续每 6 小时自动更新，无需反复运行脚本；已有配置中的更新开关仍然生效。服务启动成功不代表 Bee 已连接到 Hive，需查看连接日志：
+公开仓库下，安装后的服务默认继续每 6 小时自动更新；已有配置中的更新开关仍然生效。**私有仓库的 Token 仅用于本次安装，当前应用后台更新不支持 GitHub 凭据，因此需携带 `GH_TOKEN` 重跑脚本来升级。**服务启动成功不代表 Bee 已连接到 Hive，需查看连接日志：
 
 ```sh
 sudo systemctl status greatmaonethive

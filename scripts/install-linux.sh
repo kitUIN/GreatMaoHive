@@ -8,6 +8,7 @@ Usage: sudo bash install-linux.sh [hive|bee] [--config /path/appsettings.Local.j
 Downloads the latest stable kitUIN/GreatMaoHive release and installs a systemd service.
 Without --config, first installation asks for configuration interactively.
 Re-running preserves existing configuration and databases. --config is only for first setup.
+For a private repository, export GH_TOKEN and use sudo --preserve-env=GH_TOKEN bash ...
 Requires Linux x86_64, glibc, systemd and root. Python/runtime dependencies are installed
 with apt-get or dnf when missing. No .NET SDK/runtime is required.
 HELP
@@ -50,6 +51,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -61,11 +63,27 @@ def run(*args, check=True):
     return subprocess.run(args, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
 
 
-def download(url, target, limit, expected_size=None):
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        if urllib.parse.urlsplit(new_url).scheme != "https":
+            raise ValueError("Download redirected to a non-HTTPS address")
+        redirected = super().redirect_request(request, fp, code, message, headers, new_url)
+        if redirected is not None and urllib.parse.urlsplit(request.full_url).netloc != urllib.parse.urlsplit(new_url).netloc:
+            redirected.remove_header("Authorization")
+        return redirected
+
+
+def download(url, target, limit, expected_size=None, asset=False):
     for attempt in range(3):
         try:
-            request = urllib.request.Request(url, headers={"User-Agent": "GreatMaoNet-installer"})
-            with urllib.request.urlopen(request, timeout=60) as response, target.open("wb") as output:
+            headers = {"User-Agent": "GreatMaoNet-installer"}
+            if urllib.parse.urlsplit(url).netloc == "api.github.com":
+                headers["Accept"] = "application/octet-stream" if asset else "application/vnd.github+json"
+                headers["X-GitHub-Api-Version"] = "2022-11-28"
+                if os.environ.get("GH_TOKEN"):
+                    headers["Authorization"] = "Bearer " + os.environ["GH_TOKEN"]
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.build_opener(SafeRedirect()).open(request, timeout=60) as response, target.open("wb") as output:
                 if urllib.parse.urlsplit(response.url).scheme != "https":
                     raise ValueError("Download redirected to a non-HTTPS address")
                 size = 0
@@ -97,7 +115,9 @@ def release_assets(release, application):
             raise ValueError("Release missing a unique asset: " + name)
         asset = matches[0]
         expected = "https://github.com/{}/releases/download/{}/{}".format(REPOSITORY, tag, name)
-        if asset.get("browser_download_url") != expected or not 0 < asset.get("size", 0) <= limit:
+        expected_api = "https://api.github.com/repos/{}/releases/assets/{}".format(REPOSITORY, asset.get("id"))
+        if (asset.get("browser_download_url") != expected or not 0 < asset.get("size", 0) <= limit or
+                type(asset.get("id")) is not int or asset.get("url") != expected_api):
             raise ValueError("Invalid release asset: " + name)
         assets.append(asset)
     return tag[1:], assets
@@ -339,7 +359,9 @@ def main():
         version, assets = release_assets(json.loads(metadata.read_text()), application)
         print("Downloading {} {} (linux-x64)...".format(application, version), flush=True)
         for asset in assets:
-            download(asset["browser_download_url"], work / asset["name"], MAX_PACKAGE if asset["name"].endswith(".zip") else 1024, asset["size"])
+            authenticated = bool(os.environ.get("GH_TOKEN"))
+            download(asset["url"] if authenticated else asset["browser_download_url"], work / asset["name"],
+                     MAX_PACKAGE if asset["name"].endswith(".zip") else 1024, asset["size"], asset=authenticated)
         payload = work / "payload"
         files = extract_package(work / assets[0]["name"], work / assets[1]["name"], payload, application)
         try:
@@ -410,11 +432,16 @@ def main():
             print("ReadApiKey and Bee Token are in {} (sudo required); use that Bee ID/Token when installing Bee.".format(config_path))
         if role == "bee":
             print("Service running does not confirm Hive connectivity; look for 'Connected to Hive' in its logs.")
+        if os.environ.get("GH_TOKEN"):
+            print("GH_TOKEN was used only for this installation. Current runtime auto-updates require a public repository.")
 
 
 if __name__ == "__main__":
     try:
         main()
+    except urllib.error.HTTPError as error:
+        print("GitHub download failed (HTTP {}). For a private repository, export a token with Contents: read as GH_TOKEN and pass it through sudo --preserve-env=GH_TOKEN.".format(error.code), file=sys.stderr)
+        sys.exit(1)
     except (Exception, KeyboardInterrupt) as error:
         # Do not dump configuration, environment, or tokens on failure.
         print("Install failed: " + str(error), file=sys.stderr)
