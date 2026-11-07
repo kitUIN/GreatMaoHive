@@ -332,6 +332,10 @@ sudo bash install-linux.sh bee
 
 Hive 的密钥保存在 `/opt/greatmao/hive/appsettings.Local.json`，用 `sudo cat /opt/greatmao/hive/appsettings.Local.json` 查看。安装 Bee 时输入相同的 Bee ID、Token 和 Hive 的 `wss://域名:端口/agent` 地址；可填写名称、地区和 IP。需要多个 Bee 时，在 Hive 配置中的 `Hive.Bees` 数组添加各自不同的 ID/Token，再执行 `sudo systemctl restart greatmaonethive`。
 
+**Bee 首次安装可以一直回车完成部署。** 默认 ID 为 `bee-01`，名称为主机名，地区和 IP 可留空。如果本机安装过 Hive、存在相同 ID 的配置且没有 `hive.env` 覆盖，脚本会默认使用其地址和 Token；本机 Hive 已允许 HTTP 时也会默认启用对应的 `ws` 连接。HTTPS 仍会验证证书，监听通配地址会转换为 `localhost`，证书须覆盖所用主机名。修改默认地址后不会自动复用本机 Hive 的 Token。
+
+没有可复用的本机 Hive 配置时，默认地址为 `wss://localhost:7443/agent`，留空 Token 会生成随机密钥，保存到 `/opt/greatmao/bee/appsettings.Local.json`，不会打印在终端。此时服务可以启动并采集本机数据，但还未连接远程 Hive。后续填写实际 `Bee.HiveUrl`，将相同的 ID/Token 登记到 Hive，再重启对应服务即可上线；仅重新运行安装脚本会保留现有配置，不会重新提问或覆盖 Token。这项安装交互调整可直接配合 v0.2.1 程序包使用，重新下载安装脚本即可。
+
 无人值守首次安装可提供完整配置文件（与上文 `appsettings.Local.json` 格式相同，Hive 须包含 `Urls`）：
 
 ```sh

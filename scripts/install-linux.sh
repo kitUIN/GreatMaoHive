@@ -7,6 +7,8 @@ Usage: sudo bash install-linux.sh [hive|bee] [--config /path/appsettings.Local.j
 
 Downloads the latest stable kitUIN/GreatMaoHive release and installs a systemd service.
 Without --config, first installation asks for configuration interactively.
+Bee setup accepts Enter at every prompt: reuse matching local Hive settings or
+deploy with a localhost URL and generated token for later Hive configuration.
 Re-running preserves existing configuration and databases. --config is only for first setup.
 The repository is public; no GitHub account or token is required.
 Requires Linux x86_64, glibc, systemd and root. Python/runtime dependencies are installed
@@ -89,6 +91,8 @@ import zipfile
 
 REPOSITORY = "kitUIN/GreatMaoHive"
 MAX_PACKAGE = 512 * 1024 * 1024
+LOCAL_HIVE_CONFIG = Path("/opt/greatmao/hive/appsettings.Local.json")
+LOCAL_HIVE_ENV = Path("/etc/greatmao/hive.env")
 
 
 def run(*args, check=True):
@@ -187,9 +191,39 @@ def extract_package(archive, checksum, destination, application):
 
 
 def ask(label, default="", secret=False):
-    prompt = label + (" [{}]".format(default) if default else "") + ": "
+    displayed_default = "hidden" if secret and default else default
+    prompt = label + (" [{}]".format(displayed_default) if displayed_default else "") + ": "
     value = getpass.getpass(prompt) if secret else input(prompt)
     return value.strip() or default
+
+
+def local_hive_defaults(node_id):
+    # An environment file can override both listener and credentials. Do not
+    # guess its effective configuration or expose a token to an overridden URL.
+    if LOCAL_HIVE_ENV.exists():
+        return {}
+    try:
+        config = json.loads(LOCAL_HIVE_CONFIG.read_text(encoding="utf-8-sig"))
+        hive = config["Hive"]
+        nodes = [node for node in hive["Bees"] if node.get("Id") == node_id]
+        if len(nodes) != 1 or not isinstance(nodes[0].get("Token"), str) or len(nodes[0]["Token"]) < 32:
+            return {}
+        for address in config["Urls"].split(";"):
+            url = urllib.parse.urlsplit(address)
+            insecure = url.scheme == "http" and hive.get("AllowInsecureTransport") is True
+            if not url.hostname or url.username or url.password or not (url.scheme == "https" or insecure):
+                continue
+            host = url.hostname
+            if host in ("0.0.0.0", "::", "*", "+"):
+                host = "localhost"
+            if ":" in host:
+                host = "[" + host + "]"
+            authority = host + (":" + str(url.port) if url.port is not None else "")
+            return {"HiveUrl": ("ws" if insecure else "wss") + "://" + authority + "/agent",
+                    "Token": nodes[0]["Token"], "AllowInsecureTransport": insecure}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return {}
 
 
 def validate_config(config, role):
@@ -227,13 +261,22 @@ def validate_config(config, role):
 def interactive_config(role):
     node_id = ask("Bee ID", "bee-01")
     if role == "bee":
-        url = ask("Hive WebSocket URL (wss://host:7443/agent)")
-        config = {"Bee": {"Id": node_id, "Name": ask("Bee name", os.uname().nodename),
-                          "HiveUrl": url, "Token": ask("Bee Token configured on Hive", secret=True)}}
+        defaults = local_hive_defaults(node_id)
+        url = ask("Hive WebSocket URL", defaults.get("HiveUrl", "wss://localhost:7443/agent"))
+        reuse_local = bool(defaults) and url == defaults["HiveUrl"]
+        name = ask("Bee name", os.uname().nodename)
+        token_default = defaults["Token"] if reuse_local else secrets.token_hex(32)
+        token = ask("Bee Token (Enter: {})".format("reuse local Hive token" if reuse_local else "generate a new token"),
+                    token_default, secret=True)
+        config = {"Bee": {"Id": node_id, "Name": name, "HiveUrl": url, "Token": token}}
         if url.startswith("ws://"):
-            config["Bee"]["AllowInsecureTransport"] = ask("Allow plaintext ws transport? Type yes", "no") == "yes"
+            default = "yes" if reuse_local and defaults["AllowInsecureTransport"] else "no"
+            config["Bee"]["AllowInsecureTransport"] = ask("Allow plaintext ws transport? Type yes", default).lower() in ("yes", "y")
         config["Bee"]["Region"] = ask("Region (optional)") or None
         config["Bee"]["Ip"] = ask("IP (optional)") or None
+        if not reuse_local and token == token_default:
+            print("A new Bee token was generated and will be saved in the configuration file.")
+            print("Deployment can finish now. To connect, set the real Hive URL and register this Bee ID/token on that Hive.")
     else:
         config = {"Hive": {"ReadApiKey": secrets.token_hex(32), "Bees": [{"Id": node_id, "Token": secrets.token_hex(32)}]}}
         mode = ask("Hive transport: https or local-proxy", "https")
@@ -460,6 +503,7 @@ def main():
         if role == "hive" and config is not None:
             print("ReadApiKey and Bee Token are in {} (sudo required); use that Bee ID/Token when installing Bee.".format(config_path))
         if role == "bee":
+            print("Configure HiveUrl/Token in {} and run: sudo systemctl restart {}".format(config_path, service))
             print("Service running does not confirm Hive connectivity; look for 'Connected to Hive' in its logs.")
         print("Automatic updates check the public repository on startup and every 6 hours by default; existing update settings are preserved.")
 

@@ -1,5 +1,7 @@
 """Tests for the standalone installer's download, extraction and recovery boundaries."""
 import hashlib
+import io
+import json
 import os
 from pathlib import Path
 import stat
@@ -65,6 +67,66 @@ class InstallerTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
+        self.hive_config = self.root / "hive.json"
+        self.hive_env = self.root / "hive.env"
+        for name, path in (("LOCAL_HIVE_CONFIG", self.hive_config), ("LOCAL_HIVE_ENV", self.hive_env)):
+            replacement = patch.object(installer, name, path)
+            replacement.start()
+            self.addCleanup(replacement.stop)
+
+    def local_hive(self, address="http://127.0.0.1:7443", node_id="bee-01"):
+        self.hive_config.write_text(json.dumps({"Urls": address, "Hive": {
+            "AllowInsecureTransport": True, "Bees": [{"Id": node_id, "Token": "local-secret-" * 4}]}}))
+
+    def enter_only_bee(self):
+        output = io.StringIO()
+        with patch("builtins.input", return_value=""), patch.object(installer.getpass, "getpass", return_value="") as secret, \
+                patch("sys.stdout", output):
+            config = installer.interactive_config("bee")
+        installer.validate_config(config, "bee")
+        self.assertNotIn(config["Bee"]["Token"], output.getvalue())
+        self.assertNotIn(config["Bee"]["Token"], secret.call_args.args[0])
+        return config["Bee"]
+
+    def test_enter_only_without_hive_creates_valid_unique_credentials(self):
+        bee = self.enter_only_bee()
+        self.assertEqual(bee["Id"], "bee-01")
+        self.assertEqual(bee["HiveUrl"], "wss://localhost:7443/agent")
+        self.assertEqual(len(bee["Token"]), 64)
+        self.assertNotEqual(bee["Token"], self.enter_only_bee()["Token"])
+        self.assertFalse(bee.get("AllowInsecureTransport", False))
+
+    def test_enter_only_reuses_matching_local_hive_and_plaintext_opt_in(self):
+        self.local_hive()
+        bee = self.enter_only_bee()
+        self.assertEqual(bee["Token"], "local-secret-" * 4)
+        self.assertEqual(bee["HiveUrl"], "ws://127.0.0.1:7443/agent")
+        self.assertTrue(bee["AllowInsecureTransport"])
+
+    def test_local_https_wildcard_becomes_localhost_without_disabling_tls(self):
+        self.local_hive("https://0.0.0.0:7443")
+        bee = self.enter_only_bee()
+        self.assertEqual(bee["HiveUrl"], "wss://localhost:7443/agent")
+        self.assertFalse(bee.get("AllowInsecureTransport", False))
+
+    def test_overridden_url_does_not_receive_local_hive_token(self):
+        self.local_hive()
+        with patch("builtins.input", side_effect=["", "wss://other.example/agent", "", "", ""]), \
+                patch.object(installer.getpass, "getpass", return_value=""), patch("sys.stdout", io.StringIO()):
+            config = installer.interactive_config("bee")
+        installer.validate_config(config, "bee")
+        self.assertNotEqual(config["Bee"]["Token"], "local-secret-" * 4)
+
+    def test_local_hive_with_other_id_or_environment_overrides_is_not_reused(self):
+        self.local_hive(node_id="another-bee")
+        self.assertNotEqual(self.enter_only_bee()["Token"], "local-secret-" * 4)
+        self.local_hive()
+        self.hive_env.write_text("Hive__Bees__0__Token=overridden\n")
+        self.assertNotEqual(self.enter_only_bee()["Token"], "local-secret-" * 4)
+
+    def test_malformed_local_hive_falls_back_to_deployable_defaults(self):
+        self.hive_config.write_text("not json")
+        self.assertEqual(self.enter_only_bee()["HiveUrl"], "wss://localhost:7443/agent")
 
     def package(self, extra=None):
         archive = self.root / "GreatMaoNetBee-linux-x64.zip"

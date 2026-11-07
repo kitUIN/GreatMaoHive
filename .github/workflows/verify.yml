@@ -12,9 +12,13 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 jobs:
   linux-installer:
-    name: Verify Linux one-command installer
+    name: Verify Linux installer (${{ matrix.bee-setup }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        bee-setup: [local-hive, generated]
     steps:
       - uses: actions/checkout@v4
       - name: Installer syntax and failure recovery tests
@@ -22,7 +26,7 @@ jobs:
           bash -n scripts/install-linux.sh scripts/install-linux-smoke.sh
           python3 scripts/test_install_linux.py
       - name: Install public release without credentials and verify repeat installation
-        run: sudo env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/install-linux-smoke.sh
+        run: sudo env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/install-linux-smoke.sh '${{ matrix.bee-setup }}'
   verify:
     name: Test and publish (${{ matrix.rid }})
     timeout-minutes: 25
