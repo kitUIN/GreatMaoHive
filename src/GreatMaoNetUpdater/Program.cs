@@ -1,6 +1,12 @@
 using System.Diagnostics;
 using GreatMaoNet.Updates;
 
+if (args.Length == 2 && args[0] == "--process-identity" && int.TryParse(args[1], out int processId) && processId > 0)
+{
+    using var process = Process.GetProcessById(processId);
+    Console.WriteLine(ParentProcessIdentity.Capture(process));
+    return 0;
+}
 if (args.Length != 2) { Console.Error.WriteLine("Usage: GreatMaoNetUpdater <installation-directory> <update-directory>"); return 2; }
 string install = Path.GetFullPath(args[0]);
 string state = Path.GetFullPath(args[1]);
@@ -19,7 +25,7 @@ try
         try { parent = Process.GetProcessById(plan.ParentId); } catch (ArgumentException) { }
         using (parent)
         {
-            if (parent is not null && parent.StartTime.ToUniversalTime().Ticks != plan.ParentStartTicks)
+            if (parent is not null && !ParentProcessIdentity.Matches(parent, plan))
                 throw new IOException("Parent PID was reused; refusing update.");
             File.WriteAllText(Path.Combine(Path.GetDirectoryName(plan.PayloadDirectory)!, "ready"), "ready");
             if (parent is not null) await parent.WaitForExitAsync(timeout.Token);

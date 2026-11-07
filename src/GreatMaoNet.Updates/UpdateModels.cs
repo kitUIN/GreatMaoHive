@@ -29,6 +29,7 @@ public sealed class UpdatePlan
     public string[] Arguments { get; set; } = [];
     public int ParentId { get; set; }
     public long ParentStartTicks { get; set; }
+    public string ParentIdentity { get; set; } = "";
     public string Mode { get; set; } = "console";
 }
 

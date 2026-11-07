@@ -44,10 +44,13 @@ try {
         $_.Name -eq "GreatMaoNetHive$suffix" -or $_.Name -eq "GreatMaoNetUpdater$suffix" -or
         $_.Name -match '\.(dll|so|deps\.json|runtimeconfig\.json)$'
     } | ForEach-Object Name)
+    $identity = & (Join-Path $install "GreatMaoNetUpdater$suffix") --process-identity $initial.Id
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($identity)) { throw 'Could not capture parent process identity.' }
     $plan = @{
         Application = 'GreatMaoNetHive'; Version = '99.0.0'; PayloadDirectory = $payload; Files = $files
         WorkingDirectory = $install; Arguments = $arguments; ParentId = $initial.Id
         ParentStartTicks = $initial.StartTime.ToUniversalTime().Ticks; Mode = 'console'
+        ParentIdentity = $identity
     }
     $plan | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $state 'pending.json') -Encoding utf8NoBOM
     # Use a separate native helper, as the running application does during a real update.

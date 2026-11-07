@@ -134,6 +134,7 @@ public sealed class UpdateService(UpdateOptions options, string application, boo
         {
             Application = application, Version = update.Version, PayloadDirectory = payload, Files = files,
             ParentId = parent.Id, ParentStartTicks = parent.StartTime.ToUniversalTime().Ticks, Mode = mode,
+            ParentIdentity = ParentProcessIdentity.Capture(parent),
             WorkingDirectory = Environment.CurrentDirectory, Arguments = Environment.GetCommandLineArgs().Skip(1).ToArray()
         };
         UpdateInstaller.WritePlan(state, plan);
