@@ -28,6 +28,7 @@ public static class HiveApplication
         builder.Services.AddHostedService<OnlineHistoryService>();
         builder.Services.AddHostedService<RetentionService>();
         builder.Services.AddSingleton<BeeSessions>();
+        builder.Services.AddHostedService<ConnectionStatusService>();
         var app = builder.Build();
         app.UseExceptionHandler();
         app.UseStatusCodePages();

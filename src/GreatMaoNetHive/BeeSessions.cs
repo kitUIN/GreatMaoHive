@@ -40,6 +40,7 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
             registered = true;
             await protocol.SendAsync(new WireMessage { Type = "welcome", AcknowledgedSequence = ack }, lifetime.Token);
             session.Ready = true;
+            logger.LogInformation("Bee {BeeId} ({BeeName}) connected to Hive", credential.Id, first.Hello.Node.Name);
             while (!lifetime.IsCancellationRequested)
             {
                 using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
