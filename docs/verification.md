@@ -1,5 +1,11 @@
 # 本地验证记录
 
+## Linux CI 无效重连关闭握手修复（2026-11-12）
+
+- Actions `43184188776` 的 Linux 测试为 **181 通过、1 失败**，失败于 `UpgradeApiTests.RealBeeNotifiesBeforeShutdownAndApisShowUpgradeUntilReconnect` 等待无效重连错误消息；异常为 `Connection reset by peer`。上一次 `43182810031` 同一测试同样失败，Windows 测试及 Native AOT 发布均成功。蜂巢原先发送错误消息后立即 `Abort`，Linux 上可能在客户端读到错误帧前重置 TCP。
+- 拒绝协议消息时先将会话标为不可用，再发送错误并执行 `PolicyViolation` 关闭握手，发送过程复用原发送锁；最多等待 2 秒，超时仍执行清理。升级测试继续严格验证错误消息，并增加关闭帧及回应；新增握手前/握手后协议拒绝、客户端不回应关闭握手时仍按期清理的回归测试。
+- `dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r win-x64 -p:SelfContained=true --logger "trx;LogFileName=websocket-close-full.trx"`：**185 通过、0 失败、0 跳过**。本机未运行 Linux；Linux 测试及 Native AOT 发布以对应修复提交的 Actions 结果为准。未发布 Release 或部署。
+
 ## 蜂巢批量通知小蜜蜂更新（2026-11-12）
 
 - `GreatMaoNetHive --update-bee` 不指定 ID 时通知批量开始时全部在线节点；指定 ID 保持单节点行为。固定本次会话快照，离线节点逐项列为跳过，中途上线或重连不会补发。按 ID 逐个等待确认，单节点拒绝、旧版不支持或超时不阻止后续节点。

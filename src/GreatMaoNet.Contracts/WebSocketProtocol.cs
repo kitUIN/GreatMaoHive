@@ -40,5 +40,13 @@ public sealed class WebSocketProtocol(WebSocket socket) : IDisposable
         return message;
     }
 
+    public async Task CloseAsync(WebSocketCloseStatus status, string description, CancellationToken token)
+    {
+        // Close writes a frame too; serialize it with other senders before awaiting the peer's reply.
+        await sendLock.WaitAsync(token);
+        try { await socket.CloseAsync(status, description, token); }
+        finally { sendLock.Release(); }
+    }
+
     public void Dispose() => sendLock.Dispose();
 }

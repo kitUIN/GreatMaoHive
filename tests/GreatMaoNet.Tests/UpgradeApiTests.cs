@@ -51,6 +51,9 @@ public sealed class UpgradeApiTests(ApiFixture fixture) : IClassFixture<ApiFixtu
                 using var protocol = new WebSocketProtocol(invalid);
                 await protocol.SendAsync(new WireMessage { Type = "hello", Hello = new(TestData.Node(options.Id), 0, 0) }, token);
                 Assert.Equal("error", (await protocol.ReceiveAsync(token))!.Type);
+                Assert.Null(await protocol.ReceiveAsync(token));
+                Assert.Equal(WebSocketCloseStatus.PolicyViolation, invalid.CloseStatus);
+                await invalid.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, token);
             }
             await WaitAsync(() => sessions.Get(options.Id) is null, token);
             await AssertUpgradingAsync(options.Id, connected: false, token);

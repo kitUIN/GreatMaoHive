@@ -95,11 +95,17 @@ public sealed class BeeSessions(DatabaseWriter writer, HiveStore store, HiveOpti
         }
         catch (Exception exception) when (exception is InvalidDataException or JsonException or WebSocketException or OperationCanceledException or Microsoft.Data.Sqlite.SqliteException)
         {
+            if (session is not null) session.Ready = false;
             logger.LogWarning("Bee {BeeId} disconnected: {Message}", credential.Id, exception.Message);
             if (exception is InvalidDataException && socket.State == WebSocketState.Open)
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                try { await protocol.SendAsync(new WireMessage { Type = "error", Error = exception.Message }, timeout.Token); }
+                try
+                {
+                    await protocol.SendAsync(new WireMessage { Type = "error", Error = exception.Message }, timeout.Token);
+                    // Aborting immediately can reset TCP before the peer reads the error, especially on Linux.
+                    await protocol.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Protocol error.", timeout.Token);
+                }
                 catch (Exception sendException) when (sendException is WebSocketException or OperationCanceledException) { }
             }
         }
