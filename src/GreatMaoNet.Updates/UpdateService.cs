@@ -18,7 +18,8 @@ public static class UpdateRegistration
         services.AddSingleton<IReleaseCommands>(_ => new ReleaseCommands(options, application,
             new HttpClient { Timeout = TimeSpan.FromMinutes(10) }));
         services.AddHostedService(provider => new UpdateService(options, application, windowsService,
-            provider.GetRequiredService<IHostApplicationLifetime>(), provider.GetRequiredService<ILogger<UpdateService>>()));
+            provider.GetRequiredService<IHostApplicationLifetime>(), provider.GetRequiredService<ILogger<UpdateService>>(),
+            provider.GetService<IUpgradePreparation>()));
     }
 
     public static async Task<bool> HandleCommandAsync(string[] args, string application)
@@ -41,7 +42,7 @@ public static class UpdateRegistration
 }
 
 public sealed class UpdateService(UpdateOptions options, string application, bool windowsService,
-    IHostApplicationLifetime lifetime, ILogger<UpdateService> logger) : BackgroundService
+    IHostApplicationLifetime lifetime, ILogger<UpdateService> logger, IUpgradePreparation? preparation = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -146,8 +147,20 @@ public sealed class UpdateService(UpdateOptions options, string application, boo
                     await Task.Delay(100, token);
                 }
             }
+            if (preparation is not null) await preparation.PrepareAsync(token);
+            token.ThrowIfCancellationRequested();
         }
-        catch { File.Delete(Path.Combine(state, "pending.json")); throw; }
+        catch
+        {
+            File.Delete(Path.Combine(state, "pending.json"));
+            if (preparation is not null)
+            {
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try { await preparation.CancelAsync(cleanup.Token); }
+                catch (Exception exception) { logger.LogWarning(exception, "Could not cancel upgrade notice; its grace period will expire."); }
+            }
+            throw;
+        }
         logger.LogInformation("Applying release {Version}; the application will stop gracefully and restart.", update.Version);
         lifetime.StopApplication();
         return true;

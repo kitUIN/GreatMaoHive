@@ -40,7 +40,13 @@ public sealed partial class HiveStore : IDisposable
                 id TEXT PRIMARY KEY, node TEXT NOT NULL, run TEXT NOT NULL REFERENCES observation_runs(id) ON DELETE CASCADE,
                 start INTEGER NOT NULL, last_seen INTEGER NOT NULL, end INTEGER);
             CREATE INDEX IF NOT EXISTS ix_online_sessions_node ON online_sessions(node,start);
-            PRAGMA user_version=2;
+            CREATE TABLE IF NOT EXISTS upgrade_windows(
+                operation TEXT NOT NULL, node TEXT NOT NULL, session TEXT NOT NULL, source TEXT NOT NULL,
+                start INTEGER NOT NULL, expires INTEGER NOT NULL, end INTEGER,
+                PRIMARY KEY(operation,node));
+            CREATE INDEX IF NOT EXISTS ix_upgrade_windows_node ON upgrade_windows(node,start);
+            CREATE INDEX IF NOT EXISTS ix_upgrade_windows_active ON upgrade_windows(expires,node) WHERE end IS NULL;
+            PRAGMA user_version=3;
             """;
         command.ExecuteNonQuery();
     }

@@ -1,12 +1,25 @@
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
 using GreatMaoNet.Contracts;
+using GreatMaoNet.Updates;
 
 namespace GreatMaoNetBee;
 
 public sealed class HiveConnectionService(BeeOptions options, BeeStore store, SamplingService sampling, BeeConnectionState connection,
-    ILogger<HiveConnectionService> logger) : BackgroundService
+    ILogger<HiveConnectionService> logger) : BackgroundService, IUpgradePreparation
 {
+    private Func<bool, CancellationToken, Task>? upgradeNotice;
+
+    public Task PrepareAsync(CancellationToken token) => NotifyUpgradeAsync(true, token);
+    public Task CancelAsync(CancellationToken token) => NotifyUpgradeAsync(false, token);
+
+    private Task NotifyUpgradeAsync(bool starting, CancellationToken token)
+    {
+        var notify = Volatile.Read(ref upgradeNotice);
+        if (notify is not null) return notify(starting, token);
+        if (starting) logger.LogWarning("Hive is disconnected or does not support upgrade notices; this upgrade cannot be excluded from its offline history.");
+        return Task.CompletedTask;
+    }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         int attempt = 0;
@@ -28,6 +41,7 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
     private async Task ConnectAsync(CancellationToken stoppingToken)
     {
         using var socket = new ClientWebSocket();
+        socket.Options.DangerousDeflateOptions = new WebSocketDeflateOptions();
         socket.Options.SetRequestHeader("Authorization", "Bearer " + options.Token);
         using var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         connectTimeout.CancelAfter(TimeSpan.FromSeconds(15));
@@ -46,17 +60,24 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
         if (welcome.AcknowledgedSequence is not long initialAck || initialAck < store.Delivery().Ack)
             throw new InvalidDataException("Hive acknowledgement moved backwards; restore the Hive database.");
         store.Acknowledge(initialAck);
-        connection.Connected();
-        logger.LogInformation("Connected to Hive as {BeeId}", options.Id);
-
         using var session = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         TaskCompletionSource<long>? pendingAck = null;
+        (string Id, string Type, TaskCompletionSource Completion)? pendingUpgrade = null;
+        var upgradeGate = new object();
+        string? upgradeId = null;
+        Func<bool, CancellationToken, Task> notifyUpgrade = SendUpgradeNoticeAsync;
+        if (welcome.Capabilities?.Contains("upgrade-notice-v1", StringComparer.Ordinal) == true)
+            Volatile.Write(ref upgradeNotice, notifyUpgrade);
+        connection.Connected();
+        logger.LogInformation("Connected to Hive as {BeeId}", options.Id);
         var receive = ReceiveAsync();
         var upload = UploadAsync();
         var heartbeat = HeartbeatAsync();
         try { await await Task.WhenAny(receive, upload, heartbeat); }
         finally
         {
+            Interlocked.CompareExchange(ref upgradeNotice, null, notifyUpgrade);
+            lock (upgradeGate) pendingUpgrade?.Completion.TrySetException(new IOException("Hive disconnected before acknowledging the upgrade notice."));
             connection.Disconnected();
             await session.CancelAsync();
             socket.Abort();
@@ -83,6 +104,11 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
                         await protocol.SendAsync(new WireMessage { Type = "current-response", RequestId = message.RequestId, Current = current }, session.Token);
                         break;
                     case "pong": break;
+                    case "upgrade-ready" or "upgrade-cancelled":
+                        lock (upgradeGate)
+                            if (pendingUpgrade is { } pending && pending.Id == message.RequestId && pending.Type == message.Type)
+                                pending.Completion.TrySetResult();
+                        break;
                     case "error": throw new InvalidDataException(message.Error ?? "Protocol error.");
                     default: throw new InvalidDataException("Unexpected Hive message.");
                 }
@@ -106,6 +132,23 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
             while (await timer.WaitForNextTickAsync(session.Token))
                 await protocol.SendAsync(new WireMessage { Type = "ping" }, session.Token);
+        }
+
+        async Task SendUpgradeNoticeAsync(bool starting, CancellationToken token)
+        {
+            if (starting) upgradeId = Guid.NewGuid().ToString("N");
+            if (upgradeId is not { } id) return;
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (upgradeGate) pendingUpgrade = (id, starting ? "upgrade-ready" : "upgrade-cancelled", completion);
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, session.Token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                await protocol.SendAsync(new WireMessage { Type = starting ? "upgrade-start" : "upgrade-cancel", RequestId = id }, timeout.Token);
+                await completion.Task.WaitAsync(timeout.Token);
+                if (!starting) upgradeId = null;
+            }
+            finally { lock (upgradeGate) pendingUpgrade = null; }
         }
     }
 }

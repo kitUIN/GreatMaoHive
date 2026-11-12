@@ -111,7 +111,7 @@ public sealed class OnlineHistoryTests
         {
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = "DROP TABLE online_sessions; DROP TABLE observation_bees; DROP TABLE observation_runs; PRAGMA user_version=1;";
+            command.CommandText = "DROP TABLE upgrade_windows; DROP TABLE online_sessions; DROP TABLE observation_bees; DROP TABLE observation_runs; PRAGMA user_version=1;";
             command.ExecuteNonQuery();
         }
         using (var store = TestData.Store(directory))
@@ -125,6 +125,6 @@ public sealed class OnlineHistoryTests
         reopened.Open();
         using var check = reopened.CreateCommand();
         check.CommandText = "PRAGMA user_version";
-        Assert.Equal(2L, check.ExecuteScalar());
+        Assert.Equal(3L, check.ExecuteScalar());
     }
 }

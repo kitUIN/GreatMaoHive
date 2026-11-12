@@ -43,6 +43,7 @@ public sealed partial class HiveStore
     {
         using var transaction = writer.BeginTransaction();
         Observe(now);
+        FinishUpgradesOnReconnect(nodeId, now);
         using var command = writer.CreateCommand();
         command.CommandText = """
             INSERT INTO online_sessions(id,node,run,start,last_seen)
@@ -105,6 +106,7 @@ public sealed partial class HiveStore
         // online intervals into apparently observed offline time in a long-running Hive.
         command.CommandText = """
             DELETE FROM online_sessions WHERE end <= $cutoff;
+            DELETE FROM upgrade_windows WHERE COALESCE(end,expires) <= $cutoff;
             DELETE FROM observation_runs WHERE end <= $cutoff;
             UPDATE observation_runs SET start=$cutoff WHERE start<$cutoff;
             """;
@@ -120,7 +122,7 @@ public sealed partial class HiveStore
         long left = from.ToUnixTimeMilliseconds(), right = to.ToUnixTimeMilliseconds();
         if (left >= right) throw new ArgumentException("Online history requires a window of at least one millisecond.");
         long retained = Math.Max(left, now.AddDays(-retentionDays).ToUnixTimeMilliseconds());
-        var events = new SortedDictionary<long, (int Observed, int Online)> { [left] = (0, 0), [right] = (0, 0) };
+        var events = new SortedDictionary<long, (int Observed, int Online, int Upgrading)> { [left] = (0, 0, 0), [right] = (0, 0, 0) };
         using var connection = OpenReader();
         using var transaction = connection.BeginTransaction(deferred: true);
         using (var command = connection.CreateCommand())
@@ -162,19 +164,35 @@ public sealed partial class HiveStore
                 Add(reader.GetInt64(0), reader.GetInt64(1), online: true);
             }
         }
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = "SELECT start,COALESCE(end,expires) FROM upgrade_windows WHERE node=$id AND start<$to AND COALESCE(end,expires)>$from LIMIT 10001";
+            command.Parameters.AddWithValue("$id", id);
+            command.Parameters.AddWithValue("$from", retained);
+            command.Parameters.AddWithValue("$to", right);
+            using var reader = command.ExecuteReader();
+            int count = 0;
+            while (reader.Read())
+            {
+                if (++count > 10000) throw new ArgumentException("Too many upgrade intervals; shorten the time window.");
+                Add(reader.GetInt64(0), reader.GetInt64(1), online: false, upgrading: true);
+            }
+        }
         transaction.Commit();
         var intervals = new List<OnlineInterval>();
         long previous = left;
-        int observedCount = 0, onlineCount = 0;
-        double onlineSeconds = 0, offlineSeconds = 0, unknownSeconds = 0;
+        int observedCount = 0, onlineCount = 0, upgradingCount = 0;
+        double onlineSeconds = 0, offlineSeconds = 0, unknownSeconds = 0, upgradingSeconds = 0;
         foreach (var (time, change) in events)
         {
             if (time > previous)
             {
-                string status = observedCount == 0 ? "unknown" : onlineCount > 0 ? "online" : "offline";
+                string status = upgradingCount > 0 ? "upgrading" : observedCount == 0 ? "unknown" : onlineCount > 0 ? "online" : "offline";
                 double seconds = (time - previous) / 1000.0;
                 if (status == "online") onlineSeconds += seconds;
                 else if (status == "offline") offlineSeconds += seconds;
+                else if (status == "upgrading") upgradingSeconds += seconds;
                 else unknownSeconds += seconds;
                 var end = DateTimeOffset.FromUnixTimeMilliseconds(time);
                 if (intervals.Count > 0 && intervals[^1].Status == status) intervals[^1] = intervals[^1] with { To = end };
@@ -182,20 +200,21 @@ public sealed partial class HiveStore
             }
             observedCount += change.Observed;
             onlineCount += change.Online;
+            upgradingCount += change.Upgrading;
             previous = time;
         }
         return new(id, DateTimeOffset.FromUnixTimeMilliseconds(left), DateTimeOffset.FromUnixTimeMilliseconds(right), now.ToUniversalTime(),
-            onlineSeconds, offlineSeconds, unknownSeconds, intervals.ToArray());
+            onlineSeconds, offlineSeconds, unknownSeconds, intervals.ToArray()) { UpgradingSeconds = upgradingSeconds };
 
-        void Add(long start, long end, bool online)
+        void Add(long start, long end, bool online, bool upgrading = false)
         {
             start = Math.Max(start, retained);
             end = Math.Min(end, right);
             if (start >= end) return;
             var a = events.GetValueOrDefault(start);
             var b = events.GetValueOrDefault(end);
-            events[start] = (a.Observed + (online ? 0 : 1), a.Online + (online ? 1 : 0));
-            events[end] = (b.Observed - (online ? 0 : 1), b.Online - (online ? 1 : 0));
+            events[start] = (a.Observed + (online || upgrading ? 0 : 1), a.Online + (online ? 1 : 0), a.Upgrading + (upgrading ? 1 : 0));
+            events[end] = (b.Observed - (online || upgrading ? 0 : 1), b.Online - (online ? 1 : 0), b.Upgrading - (upgrading ? 1 : 0));
         }
     }
 }

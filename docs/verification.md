@@ -1,5 +1,29 @@
 # 本地验证记录
 
+## 升级期间免掉线统计（2026-11-12）
+
+- 自动更新在停止进程前执行 `IUpgradePreparation`：Bee 向支持该能力的 Hive 请求持久化升级窗口并等待确认；Hive 为当前有效会话登记窗口。新表 `upgrade_windows` 跨 Hive 重启保存，数据库版本升至 3。重连握手成功后结束窗口；取消准备撤销窗口，超时恢复正常判断。此前通信压缩改动保留。
+- 当前节点 API 增加 `upgrading` 和 `status`，在线历史增加 `upgrading` 区间及 `upgradingSeconds`，升级时间不计入 `offlineSeconds`；真实连接布尔值 `online` 保留原语义。控制台、周期日志及实时查询分别识别升级状态。
+- `dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r win-x64 -p:SelfContained=true --no-restore --logger "trx;LogFileName=upgrade-full.trx"`：**132 通过、0 失败、0 跳过**。新增 9 项覆盖 Hive 升级停机/重连、Bee 升级期间 Hive 重启、超时、取消及再次升级、重叠窗口、保留期、过期/其他会话拒绝、重复通知不延长保护、升级前已离线节点、真实 Bee 服务通知/确认/停止/替换重连、无效重连不清除保护、所有相关 API 与控制台状态。既有数据库升级测试也验证缺表自动迁移至版本 3。
+- 两端以 `dotnet publish src/<应用>/<应用>.csproj -c Release -r win-x64 -p:PublishAot=false --self-contained true -o artifacts/upgrade-smoke/<hive或bee>` 构建成功；`./scripts/smoke.ps1 -HivePath artifacts/upgrade-smoke/hive/GreatMaoNetHive.exe -BeePath artifacts/upgrade-smoke/bee/GreatMaoNetBee.exe -OutputDirectory artifacts/verification/upgrades -WarmupSeconds 2 -ObservationSeconds 5` 通过，包含真实采集/API/重启恢复。该脚本的强制退出仍按异常中断处理，不伪装成升级；升级保护由上述专门测试验证。
+- 本轮未执行线上 Release 下载替换、Linux 实机或 Native AOT 验证；上轮已确认本机缺少完整 C++ 链接工具链。尚未提交或部署。首次从旧版本升级及手动替换/重启不能自动登记升级保护，完整行为需要两端具备升级通知能力。
+
+## Bee/Hive 通信压缩（2026-11-12）
+
+- 使用独立的 `WireJson` 源生成上下文省略通信中的 null 字段，HTTP API 和数据库序列化仍使用原上下文。两端协商 `permessage-deflate`，仅压缩 `batch` 和 `current-response`，连接内复用压缩字典。
+- `dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r win-x64 -p:SelfContained=true --no-restore --logger "trx;LogFileName=compression-full.trx"`：**123 通过、0 失败、0 跳过**。新增 9 项覆盖零值与旧 JSON 兼容、压缩/普通帧混用、解压后 512 KiB 限制、旧服务端协商回退、旧客户端接入新 Hive、100 条积压数据补传与去重、心跳和实时查询。
+- `ProtocolCompressionTests.RepresentativeHourUsesLessThanHalfTheOriginalWireBytes` 通过 .NET 实际 WebSocket 编码器测量代表性单网卡的一小时消息：720 组上报/确认、240 组 ping/pong，数据值随样本变化，含首次建立压缩字典的开销。结果如下（十进制 MB，不是生产抓包）：
+
+  | 格式 | 一小时双向 WebSocket 帧 | 按相同负载折算每天 |
+  |---|---:|---:|
+  | 原格式 | 665,526 B | 15.973 MB |
+  | 仅省略空字段 | 490,326 B | 11.768 MB |
+  | 省略空字段并启用压缩 | 112,913 B | 2.710 MB |
+
+  此样本帧字节减少 **83.0%**。数字不包含 TLS/TCP/IP、底层保活、握手、重传及额外实时查询。在稳定单网卡连接、不持续查询实时速率的条件下，计入这些常规协议开销可粗估为 **8～10 MB/天、240～300 MB/30 天**；链路和实际字段值会影响结果，两端都升级且协商成功后才有完整压缩效果。
+- Hive/Bee 分别以 `dotnet publish src/<应用>/<应用>.csproj -c Release -r win-x64 -p:PublishAot=false --self-contained true -o artifacts/compression-smoke/<hive或bee>` 构建成功。`./scripts/smoke.ps1 -HivePath artifacts/compression-smoke/hive/GreatMaoNetHive.exe -BeePath artifacts/compression-smoke/bee/GreatMaoNetBee.exe -OutputDirectory artifacts/verification/compression -WarmupSeconds 2 -ObservationSeconds 5` 通过：真实采集、实时/历史 API、Hive 重启重连、Bee 重启恢复及元数据/额度/在线历史检查。
+- `./scripts/publish.ps1 -Runtime win-x64` 在更新器构建阶段报 `Platform linker not found`；本机缺少完整 C++ 链接工具链，未完成本轮 Native AOT 验证。本轮未在 Linux 实机、生产 WSS 链路或反向代理后验证，未部署或发布。
+
 验证日期：2026-11-04（Asia/Hong_Kong）。环境：Windows 10.0.26200 x64，.NET SDK 10.0.103。项目运行时与主要 Microsoft 包为 10.0.14。
 
 ## 已通过

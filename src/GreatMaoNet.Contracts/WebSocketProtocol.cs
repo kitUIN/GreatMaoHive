@@ -11,10 +11,14 @@ public sealed class WebSocketProtocol(WebSocket socket) : IDisposable
 
     public async Task SendAsync(WireMessage message, CancellationToken cancellationToken)
     {
-        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(message, ProtocolJson.Default.WireMessage);
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(message, WireJson.Default.WireMessage);
         if (bytes.Length > MaximumMessageBytes) throw new InvalidDataException("Message too large.");
+        // Only compress telemetry. Handshake metadata, errors and small control
+        // messages stay outside the compression context; credentials use HTTP headers.
+        var flags = WebSocketMessageFlags.EndOfMessage;
+        if (message.Type is not ("batch" or "current-response")) flags |= WebSocketMessageFlags.DisableCompression;
         await sendLock.WaitAsync(cancellationToken);
-        try { await socket.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, true, cancellationToken); }
+        try { await socket.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, flags, cancellationToken); }
         finally { sendLock.Release(); }
     }
 
@@ -30,7 +34,7 @@ public sealed class WebSocketProtocol(WebSocket socket) : IDisposable
             writer.Advance(result.Count);
             if (writer.WrittenCount > MaximumMessageBytes) throw new InvalidDataException("Message too large.");
         } while (!result.EndOfMessage);
-        var message = JsonSerializer.Deserialize(writer.WrittenSpan, ProtocolJson.Default.WireMessage)
+        var message = JsonSerializer.Deserialize(writer.WrittenSpan, WireJson.Default.WireMessage)
             ?? throw new InvalidDataException("Empty message.");
         if (message.Version != 1) throw new InvalidDataException("Unsupported protocol version.");
         return message;

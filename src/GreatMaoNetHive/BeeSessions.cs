@@ -6,19 +6,26 @@ using GreatMaoNet.Contracts;
 
 namespace GreatMaoNetHive;
 
-public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logger)
+public sealed class BeeSessions(DatabaseWriter writer, HiveStore store, HiveOptions options, ILogger<BeeSessions> logger)
 {
     private readonly ConcurrentDictionary<string, BeeSession> sessions = new(StringComparer.Ordinal);
     public BeeSession? Get(string id) => sessions.GetValueOrDefault(id);
-    public BeeConnectionInfo[] Snapshot(IEnumerable<string> ids) => ids.Order(StringComparer.Ordinal).Select(id =>
+    public BeeConnectionInfo[] Snapshot(IEnumerable<string> ids)
     {
-        var session = Get(id);
-        return new BeeConnectionInfo(id, session?.Online == true, session?.LastReceivedAt);
-    }).ToArray();
+        var upgrading = store.UpgradingNodes(DateTimeOffset.UtcNow);
+        return ids.Order(StringComparer.Ordinal).Select(id =>
+        {
+            var session = Get(id);
+            return new BeeConnectionInfo(id, session?.Online == true, session?.LastReceivedAt, upgrading.Contains(id));
+        }).ToArray();
+    }
 
     public async Task AcceptAsync(HttpContext context, BeeCredential credential)
     {
-        using var socket = await context.WebSockets.AcceptWebSocketAsync();
+        using var socket = await context.WebSockets.AcceptWebSocketAsync(new WebSocketAcceptContext
+        {
+            DangerousEnableCompression = true
+        });
         using var protocol = new WebSocketProtocol(socket);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
         BeeSession? session = null;
@@ -39,12 +46,14 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
             }
             if (!sessions.TryAdd(credential.Id, session)) throw new InvalidDataException("This node already has an active connection.");
             long ack = await writer.RunAsync(store => store.Register(first.Hello, DateTimeOffset.UtcNow), lifetime.Token);
+            // Do not end an upgrade window until the reconnect handshake succeeds.
+            // Publish the live session before clearing its durable upgrade marker.
+            await protocol.SendAsync(new WireMessage { Type = "welcome", AcknowledgedSequence = ack, Capabilities = ["upgrade-notice-v1"] }, lifetime.Token);
+            session.Ready = true;
             // Record using a session-specific ID so an old connection's cleanup cannot close a replacement.
             // The queued write is awaited without request cancellation to avoid an orphaned interval.
             await writer.RunAsync(store => { store.OpenOnlineSession(sessionId, credential.Id, DateTimeOffset.UtcNow); return true; }, CancellationToken.None);
             registered = true;
-            await protocol.SendAsync(new WireMessage { Type = "welcome", AcknowledgedSequence = ack }, lifetime.Token);
-            session.Ready = true;
             logger.LogInformation("Bee {BeeId} ({BeeName}) connected to Hive", credential.Id, first.Hello.Node.Name);
             while (!lifetime.IsCancellationRequested)
             {
@@ -60,6 +69,14 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
                         break;
                     case "ping":
                         await protocol.SendAsync(new WireMessage { Type = "pong" }, lifetime.Token);
+                        break;
+                    case "upgrade-start" when Guid.TryParseExact(message.RequestId, "N", out _):
+                        await writer.RunAsync(s => { s.BeginBeeUpgrade(message.RequestId!, credential.Id, sessionId, DateTimeOffset.UtcNow, options.UpgradeGraceSeconds); return true; }, lifetime.Token);
+                        await protocol.SendAsync(new WireMessage { Type = "upgrade-ready", RequestId = message.RequestId }, lifetime.Token);
+                        break;
+                    case "upgrade-cancel" when Guid.TryParseExact(message.RequestId, "N", out _):
+                        await writer.RunAsync(s => { s.CancelUpgrade(message.RequestId!, sessionId); return true; }, lifetime.Token);
+                        await protocol.SendAsync(new WireMessage { Type = "upgrade-cancelled", RequestId = message.RequestId }, lifetime.Token);
                         break;
                     case "current-response" when message.Current is not null && message.RequestId is not null:
                         session.Deliver(message.RequestId, message.Current);
@@ -99,7 +116,10 @@ public sealed class BeeSessions(DatabaseWriter writer, ILogger<BeeSessions> logg
     }
 }
 
-public sealed record BeeConnectionInfo(string Id, bool Online, DateTimeOffset? LastReceivedAt);
+public sealed record BeeConnectionInfo(string Id, bool Online, DateTimeOffset? LastReceivedAt, bool Upgrading = false)
+{
+    public string Status => Upgrading ? "upgrading" : Online ? "online" : "offline";
+}
 
 public sealed class BeeSession(WebSocketProtocol protocol, WebSocket socket, CancellationTokenSource lifetime)
 {

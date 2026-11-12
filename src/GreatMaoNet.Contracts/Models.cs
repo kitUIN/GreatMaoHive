@@ -33,6 +33,8 @@ public sealed record WireMessage
     public string? RequestId { get; init; }
     public CurrentTraffic? Current { get; init; }
     public string? Error { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string[]? Capabilities { get; init; }
 }
 
 public sealed record BeeSummary(string Id, string Name, bool Online, DateTimeOffset? LastSampledAt,
@@ -40,11 +42,21 @@ public sealed record BeeSummary(string Id, string Name, bool Online, DateTimeOff
 {
     public string? Region { get; init; }
     public string? Ip { get; init; }
+    public bool Upgrading { get; init; }
+    public string Status => Upgrading ? "upgrading" : Online ? "online" : "offline";
 }
 public sealed record BeeDetail(NodeInfo Node, bool Online, DateTimeOffset? LastSampledAt,
-    DateTimeOffset? LastReceivedAt, TrafficTotals? Totals);
+    DateTimeOffset? LastReceivedAt, TrafficTotals? Totals)
+{
+    public bool Upgrading { get; init; }
+    public string Status => Upgrading ? "upgrading" : Online ? "online" : "offline";
+}
 public sealed record TotalResponse(TrafficTotals? Totals, bool Online, DateTimeOffset? LastSampledAt,
-    DateTimeOffset? LastReceivedAt);
+    DateTimeOffset? LastReceivedAt)
+{
+    public bool Upgrading { get; init; }
+    public string Status => Upgrading ? "upgrading" : Online ? "online" : "offline";
+}
 
 public sealed record HistoryPoint(DateTimeOffset Start, DateTimeOffset End, long? ReceivedBytes,
     long? SentBytes, double? DownloadBitsPerSecond, double? UploadBitsPerSecond,
@@ -61,11 +73,16 @@ public sealed record BeeTrafficQuota(string Id, string? Name, bool Online, Traff
 {
     public string? Region { get; init; }
     public string? Ip { get; init; }
+    public bool Upgrading { get; init; }
+    public string Status => Upgrading ? "upgrading" : Online ? "online" : "offline";
 }
 public sealed record TrafficQuotasResponse(DateTimeOffset AsOf, BeeTrafficQuota[] Bees);
 public sealed record OnlineInterval(DateTimeOffset From, DateTimeOffset To, string Status);
 public sealed record OnlineHistoryResponse(string Id, DateTimeOffset From, DateTimeOffset To, DateTimeOffset AsOf,
-    double OnlineSeconds, double OfflineSeconds, double UnknownSeconds, OnlineInterval[] Intervals);
+    double OnlineSeconds, double OfflineSeconds, double UnknownSeconds, OnlineInterval[] Intervals)
+{
+    public double UpgradingSeconds { get; init; }
+}
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(WireMessage))]

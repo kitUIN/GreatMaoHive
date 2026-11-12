@@ -9,10 +9,13 @@ public sealed class HiveOptions
     public string ReadApiKey { get; set; } = "";
     public bool AllowInsecureTransport { get; set; }
     public int OnlineHistoryRetentionDays { get; set; } = 90;
+    public int UpgradeGraceSeconds { get; set; } = 300;
     public BeeCredential[] Bees { get; set; } = [];
 
     public void Validate()
     {
+        if (UpgradeGraceSeconds is < 30 or > 3600)
+            throw new InvalidOperationException("Hive:UpgradeGraceSeconds must be 30..3600.");
         if (OnlineHistoryRetentionDays is < 1 or > 730)
             throw new InvalidOperationException("Hive:OnlineHistoryRetentionDays must be 1..730.");
         if (ReadApiKey.Length < 32 || Bees.Length == 0 || Bees.Any(x => string.IsNullOrWhiteSpace(x.Id) || x.Id.Length > 128 || x.Token.Length < 32))
