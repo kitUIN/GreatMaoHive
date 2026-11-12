@@ -16,7 +16,7 @@ public static class HiveSwagger
                 {
                     Title = "GreatMaoNetHive 大猫猫网络蜂巢 API",
                     Version = UpdateOptions.CurrentVersion,
-                    Description = "蜂巢网络流量查询接口。点击 Authorize，输入 Hive.ReadApiKey（不含 Bearer 前缀）后可调试查询。" +
+                    Description = "蜂巢网络流量查询与更新接口。点击 Authorize，查询使用 Hive.ReadApiKey，更新使用 Hive.AdminApiKey（均不含 Bearer 前缀）。" +
                         "节点 Token 不能查询 API。所有时间均为带 UTC 偏移的 ISO 8601 时间；字节为 int64，速率为 bit/s。" +
                         "小蜜蜂通过 /agent 建立 WebSocket 连接，该协议不在 Swagger UI 中调试。"
                 };
@@ -29,14 +29,20 @@ public static class HiveSwagger
                     {
                         Type = SecuritySchemeType.Http, Scheme = "bearer",
                         Description = "输入 Hive.ReadApiKey；不要添加 Bearer 前缀。"
+                    },
+                    ["AdminBearer"] = new OpenApiSecurityScheme
+                    {
+                        Type = SecuritySchemeType.Http, Scheme = "bearer",
+                        Description = "更新接口专用：输入 Hive.AdminApiKey；不要添加 Bearer 前缀。"
                     }
                 };
                 foreach (var (path, item) in document.Paths)
                 {
                     if (!path.StartsWith("/api/", StringComparison.Ordinal) || item.Operations is null) continue;
-                    foreach (var operation in item.Operations.Values)
+                    foreach (var (method, operation) in item.Operations)
                     {
-                        operation.Security = [new OpenApiSecurityRequirement { [new OpenApiSecuritySchemeReference("Bearer", document)] = [] }];
+                        string scheme = method == HttpMethod.Get || method == HttpMethod.Head ? "Bearer" : "AdminBearer";
+                        operation.Security = [new OpenApiSecurityRequirement { [new OpenApiSecuritySchemeReference(scheme, document)] = [] }];
                         bool onlineHistory = path.EndsWith("/online/history", StringComparison.Ordinal);
                         if (!onlineHistory && !path.EndsWith("/traffic/history", StringComparison.Ordinal)) continue;
                         operation.Parameters ??= [];

@@ -6,7 +6,7 @@ using GreatMaoNet.Updates;
 namespace GreatMaoNetBee;
 
 public sealed class HiveConnectionService(BeeOptions options, BeeStore store, SamplingService sampling, BeeConnectionState connection,
-    ILogger<HiveConnectionService> logger) : BackgroundService, IUpgradePreparation
+    ILogger<HiveConnectionService> logger, IRemoteUpdateTrigger? updates = null) : BackgroundService, IUpgradePreparation
 {
     private Func<bool, CancellationToken, Task>? upgradeNotice;
 
@@ -51,7 +51,7 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
         await protocol.SendAsync(new WireMessage { Type = "hello", Hello = new(
             new NodeInfo(options.Id, options.Name, RuntimeInformation.OSDescription, checkpoint.DataEpoch,
                 checkpoint.Counters.Select(x => x.Interface).ToArray()) { Region = options.Region, Ip = options.Ip },
-            store.Delivery().Ack, checkpoint.Sequence) }, stoppingToken);
+            store.Delivery().Ack, checkpoint.Sequence), Capabilities = updates is null ? null : ["remote-update-v1"] }, stoppingToken);
         using var handshake = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         handshake.CancelAfter(TimeSpan.FromSeconds(15));
         var welcome = await protocol.ReceiveAsync(handshake.Token);
@@ -104,6 +104,12 @@ public sealed class HiveConnectionService(BeeOptions options, BeeStore store, Sa
                         await protocol.SendAsync(new WireMessage { Type = "current-response", RequestId = message.RequestId, Current = current }, session.Token);
                         break;
                     case "pong": break;
+                    case "update-request" when Guid.TryParseExact(message.RequestId, "N", out _):
+                        string status = updates?.RequestUpdate() ?? "unavailable";
+                        await protocol.SendAsync(new WireMessage { Type = "update-response", RequestId = message.RequestId,
+                            UpdateStatus = status }, session.Token);
+                        logger.LogInformation("Hive update request {RequestId}: {Status}", message.RequestId, status);
+                        break;
                     case "upgrade-ready" or "upgrade-cancelled":
                         lock (upgradeGate)
                             if (pendingUpgrade is { } pending && pending.Id == message.RequestId && pending.Type == message.Type)

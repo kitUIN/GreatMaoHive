@@ -9,6 +9,7 @@ public sealed partial class UpdateOptions
     public bool Enabled { get; set; } = true;
     public bool AutoDownload { get; set; } = true;
     public bool AutoApply { get; set; } = true;
+    public bool AllowRemoteUpdates { get; set; } = true;
     public string Repository { get; set; } = "kitUIN/GreatMaoHive";
     public int CheckIntervalMinutes { get; set; } = 360;
     public string DownloadDirectory { get; set; } = ".updates";

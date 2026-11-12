@@ -14,15 +14,19 @@ namespace GreatMaoNet.Tests;
 public sealed class ApiFixture : IAsyncLifetime
 {
     public const string ReadKey = "read-key-for-integration-tests-only-000000";
+    public const string AdminKey = "admin-key-for-integration-tests-only-00000";
     public const string BeeKey = "bee-key-for-integration-tests-only-0000000";
     public TemporaryDirectory Directory { get; } = new();
     public WebApplication Application { get; private set; } = null!;
     public Uri Address { get; private set; } = null!;
     public HttpClient Client { get; private set; } = null!;
+    public string ControlPipeName { get; } = OperatingSystem.IsWindows() ? "gm-" + Guid.NewGuid().ToString("N")
+        : Path.Combine(Path.GetTempPath(), "gm-" + Guid.NewGuid().ToString("N") + ".sock");
     public async Task InitializeAsync()
     {
         var arguments = new List<string> { "--Hive:Bees:0:Quota:LimitBytes", "100", "--Updates:Enabled", "false", "--urls", "http://127.0.0.1:0", "--Hive:DatabasePath", Directory.File("hive.db"),
-            "--Hive:ReadApiKey", ReadKey, "--Hive:Bees:0:Id", "bee-01", "--Hive:Bees:0:Token", BeeKey,
+            "--Hive:ControlPipeName", ControlPipeName,
+            "--Hive:ReadApiKey", ReadKey, "--Hive:AdminApiKey", AdminKey, "--Hive:Bees:0:Id", "bee-01", "--Hive:Bees:0:Token", BeeKey,
             "--Hive:AllowInsecureTransport", "true", "--Logging:LogLevel:Default", "None" };
         for (int i = 0; i < 100; i++)
             arguments.AddRange([$"--Hive:Bees:{i + 1}:Id", $"socket-{i}", $"--Hive:Bees:{i + 1}:Token", $"socket-{i}-test-credential".PadRight(40, 'x')]);

@@ -15,9 +15,12 @@ public static class UpdateRegistration
         options.Validate();
         options.DownloadDirectory = Path.GetFullPath(options.DownloadDirectory, AppContext.BaseDirectory);
         services.AddSingleton(options);
+        services.AddSingleton<UpdateRequestQueue>();
+        services.AddSingleton<IRemoteUpdateTrigger>(provider => provider.GetRequiredService<UpdateRequestQueue>());
         services.AddSingleton<IReleaseCommands>(_ => new ReleaseCommands(options, application,
             new HttpClient { Timeout = TimeSpan.FromMinutes(10) }));
         services.AddHostedService(provider => new UpdateService(options, application, windowsService,
+            provider.GetRequiredService<UpdateRequestQueue>(),
             provider.GetRequiredService<IHostApplicationLifetime>(), provider.GetRequiredService<ILogger<UpdateService>>(),
             provider.GetService<IUpgradePreparation>()));
     }
@@ -42,11 +45,11 @@ public static class UpdateRegistration
 }
 
 public sealed class UpdateService(UpdateOptions options, string application, bool windowsService,
+    UpdateRequestQueue requests,
     IHostApplicationLifetime lifetime, ILogger<UpdateService> logger, IUpgradePreparation? preparation = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Enabled) return;
         string helper = Path.Combine(AppContext.BaseDirectory, UpdateInstaller.Executable("GreatMaoNetUpdater"));
         if (!File.Exists(helper))
         {
@@ -59,31 +62,52 @@ public sealed class UpdateService(UpdateOptions options, string application, boo
         await started.Task.WaitAsync(stoppingToken);
         using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         var client = new ReleaseClient(http, options, application, UpdateOptions.Runtime);
-        while (!stoppingToken.IsCancellationRequested)
+        bool systemdReady = Environment.GetEnvironmentVariable("INVOCATION_ID") is null ||
+            Environment.GetEnvironmentVariable("GREATMAO_SYSTEMD_UPDATER") == "1";
+        requests.SetAvailable(systemdReady);
+        using var shutdown = lifetime.ApplicationStopping.Register(() => requests.SetAvailable(false));
+        var delay = options.Enabled ? TimeSpan.Zero : Timeout.InfiniteTimeSpan;
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                timeout.CancelAfter(TimeSpan.FromMinutes(15));
-                if (await CheckAndStageAsync(client, helper, timeout.Token)) return;
+                bool remote = await requests.WaitAsync(delay, stoppingToken);
+                if (!remote && !requests.TryBeginAutomatic()) continue;
+                try
+                {
+                    if (remote) logger.LogInformation("Hive requested an immediate release update.");
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                    timeout.CancelAfter(TimeSpan.FromMinutes(15));
+                    if (await CheckAndStageAsync(client, helper, remote, timeout.Token)) return;
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+                catch (Exception exception) { logger.LogWarning(exception, "Release update failed; monitoring continues and will retry later."); }
+                finally { requests.Complete(); }
+                delay = options.Enabled ? TimeSpan.FromMinutes(options.CheckIntervalMinutes) : Timeout.InfiniteTimeSpan;
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
-            catch (Exception exception) { logger.LogWarning(exception, "Release update failed; monitoring continues and will retry later."); }
-            await Task.Delay(TimeSpan.FromMinutes(options.CheckIntervalMinutes), stoppingToken);
         }
+        finally { requests.SetAvailable(false); }
     }
 
-    private async Task<bool> CheckAndStageAsync(ReleaseClient client, string helper, CancellationToken token)
+    private async Task<bool> CheckAndStageAsync(ReleaseClient client, string helper, bool remote, CancellationToken token)
     {
-        var update = await client.CheckAsync(UpdateOptions.CurrentVersion, token);
-        if (update is null) return false;
+        var update = await client.CheckAsync(UpdateOptions.CurrentVersion, token, requireAccessibleRelease: remote);
+        if (update is null)
+        {
+            logger.LogInformation("No newer stable release for {Application} {Version}.", application, UpdateOptions.CurrentVersion);
+            return false;
+        }
         logger.LogInformation("Release {Version} available for {Application}.", update.Version, application);
         if (!options.AutoDownload) return false;
         string state = options.DownloadDirectory;
         Directory.CreateDirectory(state);
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(state, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         using var updateLock = new FileStream(Path.Combine(state, "update.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        if (File.Exists(Path.Combine(state, $"failed-{update.Version}.txt"))) return false;
+        if (File.Exists(Path.Combine(state, $"failed-{update.Version}.txt")))
+        {
+            logger.LogWarning("Release {Version} previously failed; inspect its failure marker before retrying.", update.Version);
+            return false;
+        }
         // An interrupted handoff needs operator inspection, not another overwrite of its recovery state.
         if (File.Exists(Path.Combine(state, "pending.json")))
             throw new IOException("A pending update exists; inspect updater.log and pending.json before retrying.");
@@ -162,6 +186,7 @@ public sealed class UpdateService(UpdateOptions options, string application, boo
             throw;
         }
         logger.LogInformation("Applying release {Version}; the application will stop gracefully and restart.", update.Version);
+        requests.SetAvailable(false);
         lifetime.StopApplication();
         return true;
     }

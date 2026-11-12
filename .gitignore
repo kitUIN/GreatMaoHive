@@ -14,3 +14,4 @@ appsettings.Local.json
 *.p12
 *.key
 *.env
+.hive-control.sock

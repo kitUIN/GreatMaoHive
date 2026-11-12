@@ -34,6 +34,8 @@ public sealed record WireMessage
     public CurrentTraffic? Current { get; init; }
     public string? Error { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UpdateStatus { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string[]? Capabilities { get; init; }
 }
 
@@ -64,6 +66,7 @@ public sealed record HistoryPoint(DateTimeOffset Start, DateTimeOffset End, long
     bool HasGap, InterfaceInfo[] Interfaces);
 public sealed record HistoryResponse(string Step, DateTimeOffset From, DateTimeOffset To, HistoryPoint[] Points);
 public sealed record HealthResponse(string Status);
+public sealed record BeeUpdateResponse(string Id, string RequestId, string Status);
 
 public sealed record TrafficQuotaPolicy(long? LimitBytes, string Period, int ResetDay, int UtcOffsetHours);
 public sealed record BeeTrafficQuota(string Id, string? Name, bool Online, TrafficQuotaPolicy Quota,
@@ -96,6 +99,7 @@ public sealed record OnlineHistoryResponse(string Id, DateTimeOffset From, DateT
 [JsonSerializable(typeof(CurrentTraffic))]
 [JsonSerializable(typeof(HistoryResponse))]
 [JsonSerializable(typeof(HealthResponse))]
+[JsonSerializable(typeof(BeeUpdateResponse))]
 [JsonSerializable(typeof(TrafficQuotasResponse))]
 [JsonSerializable(typeof(OnlineHistoryResponse))]
 public partial class ProtocolJson : JsonSerializerContext;

@@ -38,7 +38,10 @@ public sealed class BeeSessions(DatabaseWriter writer, HiveStore store, HiveOpti
             var first = await protocol.ReceiveAsync(timeout.Token);
             if (first?.Type != "hello" || first.Hello is null || first.Hello.Node.Id != credential.Id)
                 throw new InvalidDataException("Expected hello with the authenticated node ID.");
-            session = new BeeSession(protocol, socket, lifetime);
+            session = new BeeSession(protocol, socket, lifetime)
+            {
+                SupportsRemoteUpdate = first.Capabilities?.Contains("remote-update-v1", StringComparer.Ordinal) == true
+            };
             if (sessions.TryGetValue(credential.Id, out var previous) && previous.Expired)
             {
                 previous.Abort();
@@ -80,6 +83,9 @@ public sealed class BeeSessions(DatabaseWriter writer, HiveStore store, HiveOpti
                         break;
                     case "current-response" when message.Current is not null && message.RequestId is not null:
                         session.Deliver(message.RequestId, message.Current);
+                        break;
+                    case "update-response" when message.RequestId is not null && message.UpdateStatus is not null:
+                        session.DeliverUpdate(message.RequestId, message.UpdateStatus);
                         break;
                     default: throw new InvalidDataException("Unexpected Bee message.");
                 }
@@ -129,6 +135,9 @@ public sealed class BeeSession(WebSocketProtocol protocol, WebSocket socket, Can
     private Task<CurrentTraffic>? inFlight;
     private TaskCompletionSource<CurrentTraffic>? completion;
     private string? requestId;
+    private TaskCompletionSource<string>? updateCompletion;
+    private string? updateRequestId;
+    public bool SupportsRemoteUpdate { get; init; }
     public bool Ready { get; set; }
     public bool Expired => lifetime.IsCancellationRequested || Stopwatch.GetElapsedTime(Interlocked.Read(ref lastTimestamp)).TotalSeconds >= 45;
     public bool Online => Ready && !Expired;
@@ -174,11 +183,49 @@ public sealed class BeeSession(WebSocketProtocol protocol, WebSocket socket, Can
         lock (gate) { if (id == requestId) completion?.TrySetResult(current); }
     }
 
+    public async Task<BeeUpdateResponse> UpdateAsync(string beeId, CancellationToken token)
+    {
+        TaskCompletionSource<string> pending;
+        string id = Guid.NewGuid().ToString("N");
+        lock (gate)
+        {
+            if (!Online) throw new IOException("Bee is offline.");
+            if (!SupportsRemoteUpdate) throw new InvalidOperationException("Bee does not support remote updates; upgrade it first.");
+            if (updateCompletion is not null) throw new InvalidOperationException("An update request is already awaiting acknowledgement.");
+            updateCompletion = pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            updateRequestId = id;
+        }
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            await protocol.SendAsync(new WireMessage { Type = "update-request", RequestId = id }, timeout.Token);
+            return new(beeId, id, await pending.Task.WaitAsync(timeout.Token));
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested && !lifetime.IsCancellationRequested)
+        { throw new TimeoutException("Bee did not acknowledge the update within five seconds; execution is unknown."); }
+        finally
+        {
+            lock (gate) { updateCompletion = null; updateRequestId = null; }
+        }
+    }
+
+    public void DeliverUpdate(string id, string status)
+    {
+        if (status is not ("accepted" or "busy" or "disabled" or "unavailable"))
+            throw new InvalidDataException("Invalid update acknowledgement.");
+        lock (gate) { if (id == updateRequestId) updateCompletion?.TrySetResult(status); }
+    }
+
     public void Abort()
     {
         lifetime.Cancel();
         socket.Abort();
-        lock (gate) completion?.TrySetException(new IOException("Bee disconnected."));
+        lock (gate)
+        {
+            completion?.TrySetException(new IOException("Bee disconnected."));
+            updateCompletion?.TrySetException(new IOException("Bee disconnected; update execution is unknown."));
+        }
     }
 
     public async Task DrainAsync()

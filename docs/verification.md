@@ -1,5 +1,19 @@
 # 本地验证记录
 
+## 蜂巢本机命令触发小蜜蜂更新（2026-11-12）
+
+- 新增 `GreatMaoNetHive --update-bee <节点ID>`（同时支持 `--update-bee=<节点ID>`）。一次性进程在创建 Host 前处理命令，使用同账号本机管道通知运行中的蜂巢，不启动第二个服务、不读取/修改监控数据库，也不依赖 HTTP 地址或管理员密钥。HTTP 与本机入口复用同一更新派发逻辑。
+- Linux 默认使用安装目录下的 `.hive-control.sock`，兼容现有 systemd `ReadWritePaths`；Windows 使用安装目录散列区分管道。服务端和客户端均设置 `PipeOptions.CurrentUserOnly`，命令必须使用服务运行账号。管道请求有长度上限及超时，异常客户端不会中断监控；读取回复后确认，避免 Windows 断开管道丢弃未读结果。
+- `dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r win-x64 -p:SelfContained=true --logger "trx;LogFileName=hive-cli-full.trx"`：**173 通过、0 失败、0 跳过**。本轮新增 20 项，包含独立 Hive 命令进程 → 运行中的 Hive → 真实 Bee 服务 → 更新队列、两种命令语法、无管理员密钥、不同当前目录、既有服务继续响应、离线/不存在节点、退出码、参数错误、服务未运行、异常长度以及客户端提前断开后的通道恢复。
+- `dotnet build src/GreatMaoNetHive/GreatMaoNetHive.csproj -c Release -r linux-x64 -p:SelfContained=true`：成功，**0 警告、0 错误**。仅验证 Linux 目标编译；本机无可用 Linux/WSL 运行环境，未执行 Linux 管道权限隔离或 systemd 实机升级，也未进行 Native AOT 发布、线上更新、提交或部署。
+
+## 蜂巢远程触发小蜜蜂更新（2026-11-12）
+
+- 新增 `POST /api/v1/bees/{id}/update`，使用独立且可选的 `Hive:AdminApiKey`。通过协商的 `remote-update-v1` 能力发送指令并等待节点确认，`202` 仅表示接受。离线/旧版、策略拒绝、正在更新、超时及断线均返回明确结果；不向离线节点补发。
+- 小蜜蜂将指令交给现有更新工作服务，自动与远程触发互斥。`Enabled=false` 时仍可远程触发；`AllowRemoteUpdates=false`、`AutoDownload=false` 或 `AutoApply=false` 拒绝远程安装。继续复用包校验、失败标记、文件锁、升级保护及更新器重启流程。
+- `dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r win-x64 -p:SelfContained=true --logger "trx;LogFileName=remote-update-full.trx"`：**153 通过、0 失败、0 跳过**。新增 21 项覆盖管理员鉴权与密钥隔离、未知/离线/旧版节点、确认关联、并发去重、节点拒绝、超时/延迟响应、断线、真实 Bee 服务接收并入队、入队后升级通知仍能完成，以及更新队列策略和互斥。Swagger 回归验证管理员认证方案及响应结构。
+- 本轮未向线上节点发送更新指令，未执行真实 Release 下载替换、Linux systemd 重启或 Native AOT 发布；未提交、发布或部署。完整功能要求两端升级，旧版 Bee 的第一次升级仍通过原自动更新或重新部署完成。
+
 ## 升级期间免掉线统计（2026-11-12）
 
 - 自动更新在停止进程前执行 `IUpgradePreparation`：Bee 向支持该能力的 Hive 请求持久化升级窗口并等待确认；Hive 为当前有效会话登记窗口。新表 `upgrade_windows` 跨 Hive 重启保存，数据库版本升至 3。重连握手成功后结束窗口；取消准备撤销窗口，超时恢复正常判断。此前通信压缩改动保留。

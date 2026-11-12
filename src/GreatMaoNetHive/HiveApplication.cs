@@ -28,6 +28,8 @@ public static class HiveApplication
         builder.Services.AddHostedService<OnlineHistoryService>();
         builder.Services.AddHostedService<RetentionService>();
         builder.Services.AddSingleton<BeeSessions>();
+        builder.Services.AddSingleton<BeeUpdateCommands>();
+        builder.Services.AddHostedService<HiveControlService>();
         builder.Services.AddSingleton<IUpgradePreparation, HiveUpgradePreparation>();
         builder.Services.AddHostedService<ConnectionStatusService>();
         builder.Services.AddSingleton<IConsoleStatusProvider, HiveConsoleStatus>();
@@ -43,10 +45,13 @@ public static class HiveApplication
                 await Results.Problem(statusCode: 400, title: "HTTPS is required.").ExecuteAsync(context);
                 return;
             }
-            if (context.Request.Path.StartsWithSegments("/api") && !HiveOptions.Matches(context.Request.Headers.Authorization, options.ReadApiKey))
+            bool readRequest = HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method);
+            if (context.Request.Path.StartsWithSegments("/api") &&
+                !HiveOptions.Matches(context.Request.Headers.Authorization, readRequest ? options.ReadApiKey : options.AdminApiKey))
             {
                 context.Response.Headers.WWWAuthenticate = "Bearer";
-                await Results.Problem(statusCode: 401, title: "A valid read API key is required.").ExecuteAsync(context);
+                await Results.Problem(statusCode: 401, title: readRequest ? "A valid read API key is required." :
+                    "A valid admin API key is required; configure Hive:AdminApiKey to enable remote updates.").ExecuteAsync(context);
                 return;
             }
             await next(context);
@@ -114,6 +119,11 @@ public static class HiveApplication
         app.MapGet("/api/v1/bees/{id}/traffic/current", CurrentAsync)
             .WithTags("流量").WithSummary("查询实时流量").WithDescription("等待节点下一次有效采样，最多 3 秒；离线或无有效采样返回 503，超时返回 504。")
             .Produces<CurrentTraffic>().ProducesProblem(400).ProducesProblem(401).ProducesProblem(404).ProducesProblem(503).ProducesProblem(504);
+        app.MapPost("/api/v1/bees/{id}/update", UpdateBeeAsync)
+            .WithTags("更新").WithSummary("通知指定小蜜蜂立即更新")
+            .WithDescription("需要 Hive.AdminApiKey。通过当前 WebSocket 连接通知在线小蜜蜂检查、下载并安装最新稳定版。202 表示节点已接受，不代表升级完成；最多等待确认 5 秒，超时或断线时执行结果未知。旧版节点不支持时返回 409。")
+            .Produces<BeeUpdateResponse>(202).ProducesProblem(400).ProducesProblem(401).ProducesProblem(404)
+            .ProducesProblem(409).ProducesProblem(503).ProducesProblem(504);
         app.MapGet("/api/v1/bees/{id}/traffic/history", (string id, HttpContext context, HiveStore store) =>
         {
             if (store.Get(id) is null) return Missing();
@@ -152,6 +162,14 @@ public static class HiveApplication
     }
 
     private static IResult Missing() => Results.Problem(statusCode: 404, title: "Bee not found.");
+
+    private static async Task<IResult> UpdateBeeAsync(string id, BeeUpdateCommands commands, HttpContext context)
+    {
+        var result = await commands.UpdateAsync(id, context.RequestAborted);
+        return result.StatusCode == 202 && result.Response is { } response
+            ? Results.Json(response, ProtocolJson.Default.BeeUpdateResponse, statusCode: 202)
+            : Results.Problem(statusCode: result.StatusCode, title: result.Error);
+    }
 
     private static async Task<IResult> CurrentAsync(string id, HiveStore store, BeeSessions sessions, HttpContext context)
     {

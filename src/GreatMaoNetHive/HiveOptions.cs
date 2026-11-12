@@ -7,6 +7,8 @@ public sealed class HiveOptions
 {
     public string DatabasePath { get; set; } = "data/hive.db";
     public string ReadApiKey { get; set; } = "";
+    public string AdminApiKey { get; set; } = "";
+    public string? ControlPipeName { get; set; }
     public bool AllowInsecureTransport { get; set; }
     public int OnlineHistoryRetentionDays { get; set; } = 90;
     public int UpgradeGraceSeconds { get; set; } = 300;
@@ -23,12 +25,15 @@ public sealed class HiveOptions
         if (Bees.Select(x => x.Id).Distinct(StringComparer.Ordinal).Count() != Bees.Length ||
             Bees.Select(x => x.Token).Append(ReadApiKey).Distinct(StringComparer.Ordinal).Count() != Bees.Length + 1)
             throw new InvalidOperationException("Bee IDs and all credentials must be unique.");
+        if (AdminApiKey.Length != 0 && (AdminApiKey.Length < 32 ||
+            Bees.Select(x => x.Token).Append(ReadApiKey).Contains(AdminApiKey, StringComparer.Ordinal)))
+            throw new InvalidOperationException("Hive:AdminApiKey must have at least 32 characters and differ from all other credentials.");
         foreach (var bee in Bees) bee.Quota.Validate();
     }
 
     public static bool Matches(string? authorization, string secret)
     {
-        if (authorization is null || !authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrEmpty(secret) || authorization is null || !authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) return false;
         return CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(authorization[7..])),
             SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
     }

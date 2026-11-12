@@ -67,7 +67,7 @@ git push origin v0.2.0
 }
 ```
 
-配置可放在 `appsettings.Local.json`，或通过 `Updates__Enabled` 等环境变量覆盖。`DownloadDirectory` 相对可执行文件目录解析；每个应用必须使用独立更新目录。关闭更新使用 `Enabled=false`；只下载不安装使用 `AutoApply=false`；仅检查使用 `AutoDownload=false, AutoApply=false`。网络、限流、校验或权限检查失败时继续监控，下一周期重试。开发构建没有独立 AOT 更新器时不运行后台更新。GitHub 仓库须公开；Fork 使用者应修改 `Repository`。
+配置可放在 `appsettings.Local.json`，或通过 `Updates__Enabled` 等环境变量覆盖。`DownloadDirectory` 相对可执行文件目录解析；每个应用必须使用独立更新目录。关闭定时自动更新使用 `Enabled=false`，关闭蜂巢远程触发使用 `AllowRemoteUpdates=false`；只下载不安装使用 `AutoApply=false`；仅检查使用 `AutoDownload=false, AutoApply=false`。网络、限流、校验或权限检查失败时继续监控，自动更新开启时下一周期重试。开发构建没有独立 AOT 更新器时不运行后台更新。GitHub 仓库须公开；Fork 使用者应修改 `Repository`。
 
 以下命令不需要配置节点密钥：
 
@@ -100,9 +100,46 @@ git push origin v0.2.0
 
 systemd / Windows Service 模式自动关闭交互命令；`systemctl status` / `journalctl` 用于查看服务状态和日志。普通运行时也可通过 `Console__Enabled=false` 关闭命令输入。标准输入被重定向时默认关闭；测试或管道操作可显式指定 `--Console:Enabled true`，输入结束只关闭命令读取，不会停止监控。
 
+### 从蜂巢通知小蜜蜂更新
+
+两端升级到支持此功能的版本后，可从蜂巢主机终端、Swagger 页面或 HTTP 接口通知指定在线小蜜蜂立即更新。第一次升级旧版小蜜蜂仍需依靠其自动更新或重新部署。
+
+在蜂巢主机上直接执行（将 `bee-01` 换成实际节点 ID）：
+
+```bash
+sudo -u greatmao /opt/greatmao/hive/GreatMaoNetHive --update-bee bee-01
+```
+
+此命令通过本机通道通知已经运行的蜂巢，再由蜂巢向小蜜蜂下发更新指令；不会启动第二个蜂巢或停止现有服务。**不需要管理员 API Key 或 HTTP 地址**，但必须使用蜂巢服务的运行账号，并确保已升级的蜂巢服务正在运行。默认 Linux 安装的账号是 `greatmao`。命令输出 `update accepted` 表示节点已接受，不代表升级完成；退出码 `0` 表示已接受，`1` 表示连接失败、节点拒绝或结果未知，`2` 表示命令参数错误。现有 `--check-update` 仍只检查蜂巢自身版本。
+
+默认 Linux 本机通道为安装目录下的 `.hive-control.sock`，现有 systemd 单元已允许该目录写入，无需更改服务单元。Windows 使用按安装目录区分的命名管道；两端都校验连接进程属于同一运行账号。特殊安装可通过 `Hive:ControlPipeName`（环境变量 `Hive__ControlPipeName`）覆盖，Linux 须使用可写目录下的绝对路径。命令读取可执行文件目录的配置；若只在 systemd 环境文件设置了自定义通道，还需给命令传入相同的 `--Hive:ControlPipeName <路径>`。本机通道启动失败会记录错误，监控服务仍继续运行。
+
+若从 Swagger 或 HTTP 调用，在蜂巢 `appsettings.Local.json` 的 `Hive` 节点增加 `AdminApiKey`（独立随机密钥，至少 32 字符，与 `ReadApiKey` 和所有 Bee Token 不同），然后重启蜂巢。也可设置环境变量 `Hive__AdminApiKey`。未配置时 HTTP 更新接口不可用，原查询接口继续使用只读密钥，本机命令仍可使用。
+
+```bash
+# HIVE_ADMIN_API_KEY 为上述管理员密钥；将地址和 bee-01 换成实际值。
+curl --fail-with-body -X POST 'https://hive.example:7443/api/v1/bees/bee-01/update' \
+  -H "Authorization: Bearer $HIVE_ADMIN_API_KEY"
+```
+
+Swagger 的 **Authorize → AdminBearer** 填管理员密钥，再执行 `POST /api/v1/bees/{id}/update`，无需请求体。返回 `202` 和 `{"id":"bee-01","requestId":"...","status":"accepted"}` 表示小蜜蜂已接受指令，**不表示更新完成**。小蜜蜂会立即检查自己配置的仓库，仅在有更高稳定版本时下载、校验并正常退出，交由现有更新器和 systemd/Windows Service 完成替换及重启；升级前仍会登记免掉线窗口。
+
+小蜜蜂的 `Updates:AllowRemoteUpdates` 默认为 `true`；远程安装还要求 `AutoDownload=true`、`AutoApply=true`，否则拒绝请求。`Enabled=false` 只关闭启动和定时检查，仍可由蜂巢触发。可将 `Enabled=false`、`AllowRemoteUpdates=true`、`AutoDownload=true`、`AutoApply=true` 组合为人工集中触发模式。自动与远程更新共用一个执行队列和原文件锁，不会并发安装。下载失败、已是最新版或存在失败标记时继续运行，具体结果写入小蜜蜂日志。
+
+| HTTP 状态 | 含义 |
+|---|---|
+| `202` | 节点已接受；使用 `journalctl -u greatmaonetbee -f` 查看执行结果 |
+| `401` | 管理员密钥未配置或不正确；只读密钥与节点 Token 无权更新 |
+| `404` | 蜂巢未配置该节点 |
+| `409` | 旧版节点不支持、已有更新请求或更新正在执行，或小蜜蜂禁止远程安装 |
+| `503` | 节点离线/断线，或缺少更新器、systemd 更新钩子；断线时执行结果可能未知 |
+| `504` | 5 秒内未收到确认，执行结果未知，先检查小蜜蜂日志 |
+
+离线节点不会排队补发。当前接口逐个指定节点，不会自动广播给所有节点。
+
 ## 配置与首次运行
 
-两端读取自己的 `appsettings.json`，可用 `appsettings.Local.json`、环境变量或命令行覆盖；环境变量以 `__` 表示配置层级。默认密钥为空，程序会拒绝启动，避免使用公共默认凭证。密钥至少 32 个字符；蜂巢的只读 API Key 和每只蜜蜂的 Token 必须各不相同。
+两端读取自己的 `appsettings.json`，可用 `appsettings.Local.json`、环境变量或命令行覆盖；环境变量以 `__` 表示配置层级。默认节点 Token 和只读密钥为空，程序会拒绝启动，避免使用公共默认凭证。密钥至少 32 个字符；蜂巢的只读 API Key、可选管理员密钥和每只蜜蜂的 Token 必须各不相同。`AdminApiKey` 可留空，此时仅关闭更新管理接口。
 
 可在 PowerShell 7 中生成密钥：
 
@@ -188,9 +225,9 @@ systemd / Windows Service 模式自动关闭交互命令；`systemctl status` / 
 
 ### Swagger 文档与调试
 
-蜂巢启动后访问 `https://<蜂巢地址>:7443/swagger`（自动跳转到 `/swagger/index.html`）。OpenAPI 文档地址为 `/swagger/v1/swagger.json`，包含健康检查及全部流量查询接口、参数、响应结构和错误码。页面在生产环境同样可用；HTML、JavaScript 和 CSS 全部内嵌到蜂巢二进制，无需外部 CDN，随 AOT 发布和自动更新一起交付。
+蜂巢启动后访问 `https://<蜂巢地址>:7443/swagger`（自动跳转到 `/swagger/index.html`）。OpenAPI 文档地址为 `/swagger/v1/swagger.json`，包含健康检查、流量查询和节点更新接口、参数、响应结构和错误码。页面在生产环境同样可用；HTML、JavaScript 和 CSS 全部内嵌到蜂巢二进制，无需外部 CDN，随 AOT 发布和自动更新一起交付。
 
-点击 **Authorize**，输入 `Hive.ReadApiKey` 的值（不加 `Bearer ` 前缀），即可使用 **Try it out → Execute** 调试查询。节点 Token 无法用于查询 API。页面不会持久保存输入的密钥；文档和静态资源可匿名访问，实际 `/api` 请求仍需有效 API Key。默认仍要求 HTTPS，本地 HTTP 调试需显式启用 `Hive:AllowInsecureTransport=true`。`/agent` 是小蜜蜂 WebSocket 协议入口，不作为 Swagger HTTP 调试接口。
+点击 **Authorize → Bearer**，输入 `Hive.ReadApiKey` 的值（不加 `Bearer ` 前缀），即可使用 **Try it out → Execute** 调试查询；更新接口使用 **AdminBearer** 和 `Hive.AdminApiKey`。节点 Token 无法用于查询或更新 API。页面不会持久保存输入的密钥；文档和静态资源可匿名访问，实际 `/api` 请求仍需有效 API Key。默认仍要求 HTTPS，本地 HTTP 调试需显式启用 `Hive:AllowInsecureTransport=true`。`/agent` 是小蜜蜂 WebSocket 协议入口，不作为 Swagger HTTP 调试接口。
 
 除 `/healthz` 外，查询接口均携带 `Authorization: Bearer <Hive.ReadApiKey>`。节点 Token 不能用于查询 API。所有时间戳为带偏移量的 ISO 8601；响应统一 UTC。
 

@@ -48,12 +48,13 @@ public sealed class SwaggerTests(ApiFixture fixture) : IClassFixture<ApiFixture>
         using var anonymous = new HttpClient { BaseAddress = fixture.Address };
         string json = await anonymous.GetStringAsync("/swagger/v1/swagger.json");
         Assert.DoesNotContain(ApiFixture.ReadKey, json);
+        Assert.DoesNotContain(ApiFixture.AdminKey, json);
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
         Assert.StartsWith("3.", root.GetProperty("openapi").GetString());
         Assert.Equal("../../", root.GetProperty("servers")[0].GetProperty("url").GetString());
         var paths = root.GetProperty("paths");
-        Assert.Equal(8, paths.EnumerateObject().Count());
+        Assert.Equal(9, paths.EnumerateObject().Count());
         Assert.True(paths.TryGetProperty("/api/v1/bees/traffic/quotas", out _));
         var online = paths.GetProperty("/api/v1/bees/{id}/online/history").GetProperty("get");
         Assert.Equal(new[] { "from", "id", "to" }, online.GetProperty("parameters").EnumerateArray()
@@ -62,10 +63,13 @@ public sealed class SwaggerTests(ApiFixture fixture) : IClassFixture<ApiFixture>
         Assert.False(paths.GetProperty("/healthz").GetProperty("get").TryGetProperty("security", out _));
         foreach (var path in paths.EnumerateObject().Where(x => x.Name.StartsWith("/api/", StringComparison.Ordinal)))
         {
-            var operation = path.Value.GetProperty("get");
-            Assert.True(operation.GetProperty("security")[0].TryGetProperty("Bearer", out _));
+            bool update = path.Name.EndsWith("/update", StringComparison.Ordinal);
+            var operation = path.Value.GetProperty(update ? "post" : "get");
+            Assert.True(operation.GetProperty("security")[0].TryGetProperty(update ? "AdminBearer" : "Bearer", out _));
             Assert.True(operation.GetProperty("responses").TryGetProperty("401", out _));
         }
+        var updateResponses = paths.GetProperty("/api/v1/bees/{id}/update").GetProperty("post").GetProperty("responses");
+        foreach (string code in new[] { "202", "401", "404", "409", "503", "504" }) Assert.True(updateResponses.TryGetProperty(code, out _));
         var components = root.GetProperty("components");
         var bearer = components.GetProperty("securitySchemes").GetProperty("Bearer");
         Assert.Equal("http", bearer.GetProperty("type").GetString());
