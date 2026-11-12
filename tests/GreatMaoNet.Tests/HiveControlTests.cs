@@ -106,13 +106,13 @@ public sealed class HiveControlTests(ApiFixture fixture) : IClassFixture<ApiFixt
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var directory = new TemporaryDirectory();
-        var result = await RunProcessAsync(["--update-bee"], directory.Path, timeout.Token);
+        var result = await RunProcessAsync(["--update-bee="], directory.Path, timeout.Token);
         Assert.Equal(2, result.ExitCode);
         Assert.Contains("Usage:", result.Error);
         Assert.Empty(Directory.GetFileSystemEntries(directory.Path));
     }
 
-    private static async Task<(int ExitCode, string Output, string Error)> RunProcessAsync(string[] args, string workingDirectory, CancellationToken token)
+    internal static async Task<(int ExitCode, string Output, string Error)> RunProcessAsync(string[] args, string workingDirectory, CancellationToken token)
     {
         var start = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, UpdateInstaller.Executable("GreatMaoNetHive")))
         {
@@ -139,13 +139,16 @@ public sealed class HiveControlTests(ApiFixture fixture) : IClassFixture<ApiFixt
 public sealed class HiveControlCommandTests
 {
     [Theory]
-    [InlineData("--update-bee")]
     [InlineData("--update-bee", "")]
     [InlineData("--update-bee", "--check-update")]
     [InlineData("--update-bee", "bee", "--version")]
     [InlineData("--update-bee=bee", "--update-bee=other")]
     [InlineData("--update-bee=")]
     [InlineData("--update-bee", "bee\nother")]
+    [InlineData("--update-bee", "--update-bee")]
+    [InlineData("--update-bee", "--bee", "bee-01")]
+    [InlineData("--update-bee", "bee-01", "bee-02")]
+    [InlineData("--update-bee", "--Hive:ControlPipeName")]
     public async Task InvalidArgumentsReturnUsage(params string[] args)
     {
         using var output = new StringWriter();

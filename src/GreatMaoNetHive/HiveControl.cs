@@ -8,10 +8,12 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace GreatMaoNetHive;
 
-public sealed record HiveControlRequest(string Command, string BeeId);
+public sealed record HiveControlRequest(string Command, string? BeeId);
+public sealed record HiveBatchUpdateMessage(string Type, BeeBatchUpdateResult? Item = null, int Accepted = 0, int Failed = 0, int Skipped = 0);
 
 [JsonSerializable(typeof(HiveControlRequest))]
 [JsonSerializable(typeof(BeeUpdateCommandResult))]
+[JsonSerializable(typeof(HiveBatchUpdateMessage))]
 public partial class HiveControlJson : JsonSerializerContext;
 
 public static class HiveControlProtocol
@@ -70,8 +72,13 @@ public sealed class HiveControlService(HiveOptions options, BeeUpdateCommands co
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                     timeout.CancelAfter(TimeSpan.FromSeconds(10));
                     var request = await HiveControlProtocol.ReadAsync(server, HiveControlJson.Default.HiveControlRequest, timeout.Token);
+                    if (request.Command == "update-all-bees" && request.BeeId is null)
+                    {
+                        await UpdateAllAsync(server, stoppingToken);
+                        continue;
+                    }
                     var result = request.Command == "update-bee" && ValidBeeId(request.BeeId)
-                        ? await commands.UpdateAsync(request.BeeId, timeout.Token)
+                        ? await commands.UpdateAsync(request.BeeId!, timeout.Token)
                         : new BeeUpdateCommandResult(400, null, "Expected update-bee and a valid Bee ID.");
                     await HiveControlProtocol.WriteAsync(server, result, HiveControlJson.Default.BeeUpdateCommandResult, timeout.Token);
                     // Windows Disconnect can discard unread data; wait until the client has read the reply.
@@ -89,6 +96,29 @@ public sealed class HiveControlService(HiveOptions options, BeeUpdateCommands co
     }
 
     public static bool ValidBeeId(string? id) => !string.IsNullOrWhiteSpace(id) && id.Length <= 128 && !id.Any(char.IsControl);
+
+    private async Task UpdateAllAsync(Stream stream, CancellationToken token)
+    {
+        int accepted = 0, failed = 0, skipped = 0;
+        await SendAsync(new("batch-start"));
+        await foreach (var item in commands.UpdateAllAsync(token))
+        {
+            if (item.Skipped) skipped++;
+            else if (item.Result.StatusCode == 202) accepted++;
+            else failed++;
+            await SendAsync(new("batch-item", item));
+        }
+        await SendAsync(new("batch-complete", Accepted: accepted, Failed: failed, Skipped: skipped));
+
+        async Task SendAsync(HiveBatchUpdateMessage message)
+        {
+            // Each reply has its own deadline and frame, independent of the number of nodes.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            await HiveControlProtocol.WriteAsync(stream, message, HiveControlJson.Default.HiveBatchUpdateMessage, timeout.Token);
+            await stream.ReadExactlyAsync(new byte[1], timeout.Token);
+        }
+    }
 }
 
 public static class HiveControlCommand
@@ -97,19 +127,35 @@ public static class HiveControlCommand
     {
         if (!args.Any(arg => arg == "--update-bee" || arg.StartsWith("--update-bee=", StringComparison.Ordinal))) return null;
         string? id = null;
+        bool updateSeen = false;
         var configurationArgs = new List<string>();
         for (int index = 0; index < args.Length; index++)
         {
             string arg = args[index];
             if (arg == "--update-bee" || arg.StartsWith("--update-bee=", StringComparison.Ordinal))
             {
-                if (id is not null) return await UsageAsync(error);
-                if (arg == "--update-bee") id = ++index < args.Length ? args[index] : null;
-                else id = arg["--update-bee=".Length..];
-                if (!HiveControlService.ValidBeeId(id) || id!.StartsWith("--", StringComparison.Ordinal)) return await UsageAsync(error);
+                if (updateSeen) return await UsageAsync(error);
+                updateSeen = true;
+                if (arg == "--update-bee")
+                {
+                    if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal)) id = args[++index];
+                }
+                else
+                {
+                    id = arg["--update-bee=".Length..];
+                    if (id.Length == 0) return await UsageAsync(error);
+                }
+                if (id is not null && (!HiveControlService.ValidBeeId(id) || id.StartsWith("--", StringComparison.Ordinal))) return await UsageAsync(error);
             }
-            else if (arg is "--version" or "--check-update" or "--download-update") return await UsageAsync(error);
-            else configurationArgs.Add(arg);
+            else if (arg.Equals("--Hive:ControlPipeName", StringComparison.OrdinalIgnoreCase))
+            {
+                if (++index >= args.Length || string.IsNullOrWhiteSpace(args[index]) || args[index].StartsWith("--", StringComparison.Ordinal)) return await UsageAsync(error);
+                configurationArgs.Add(arg);
+                configurationArgs.Add(args[index]);
+            }
+            else if (arg.StartsWith("--Hive:ControlPipeName=", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(arg.Split('=', 2)[1]))
+                configurationArgs.Add(arg);
+            else return await UsageAsync(error);
         }
 
         try
@@ -128,7 +174,8 @@ public static class HiveControlCommand
             }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(TimeSpan.FromSeconds(15));
-            await HiveControlProtocol.WriteAsync(client, new HiveControlRequest("update-bee", id!), HiveControlJson.Default.HiveControlRequest, timeout.Token);
+            await HiveControlProtocol.WriteAsync(client, new HiveControlRequest(id is null ? "update-all-bees" : "update-bee", id), HiveControlJson.Default.HiveControlRequest, timeout.Token);
+            if (id is null) return await ReadBatchAsync(client, output, error, token);
             var result = await HiveControlProtocol.ReadAsync(client, HiveControlJson.Default.BeeUpdateCommandResult, timeout.Token);
             await client.WriteAsync(new byte[] { 1 }, timeout.Token);
             await client.FlushAsync(timeout.Token);
@@ -154,7 +201,54 @@ public static class HiveControlCommand
 
     private static async Task<int> UsageAsync(TextWriter error)
     {
-        await error.WriteLineAsync("Usage: GreatMaoNetHive --update-bee <bee-id> [--Hive:ControlPipeName <name-or-unix-path>]");
+        await error.WriteLineAsync("Usage: GreatMaoNetHive --update-bee [bee-id] [--Hive:ControlPipeName <name-or-unix-path>] (omit bee-id to update all online Bees)");
         return 2;
+    }
+
+    private static async Task<int> ReadBatchAsync(Stream stream, TextWriter output, TextWriter error, CancellationToken token)
+    {
+        int accepted = 0, failed = 0, skipped = 0;
+        if ((await ReceiveAsync()).Type != "batch-start")
+            throw new InvalidDataException("The running Hive does not support batch updates; upgrade and restart the Hive service first.");
+        await output.WriteLineAsync("Requesting updates for all currently online Bees...");
+        while (true)
+        {
+            var message = await ReceiveAsync();
+            if (message.Type == "batch-complete")
+            {
+                if (message.Accepted != accepted || message.Failed != failed || message.Skipped != skipped)
+                    throw new InvalidDataException("Incomplete batch acknowledgement; check the Bee service logs before retrying.");
+                await output.WriteLineAsync($"Batch complete: {accepted} accepted, {failed} failed, {skipped} offline skipped. Acceptance does not confirm installation.");
+                if (accepted == 0 && failed == 0) await error.WriteLineAsync("No online Bees to update.");
+                return accepted > 0 && failed == 0 ? 0 : 1;
+            }
+            if (message.Type != "batch-item" || message.Item is not { Result: not null } item || !HiveControlService.ValidBeeId(item.Id))
+                throw new InvalidDataException("Invalid batch acknowledgement.");
+            if (item.Skipped)
+            {
+                skipped++;
+                await output.WriteLineAsync($"Bee {item.Id}: offline; skipped.");
+            }
+            else if (item.Result.StatusCode == 202 && item.Result.Response is { Status: "accepted" } response && response.Id == item.Id)
+            {
+                accepted++;
+                await output.WriteLineAsync($"Bee {item.Id}: update accepted (request {response.RequestId}).");
+            }
+            else
+            {
+                failed++;
+                await error.WriteLineAsync($"Bee {item.Id}: update request failed ({item.Result.StatusCode}): {item.Result.Error ?? "Invalid acknowledgement."}");
+            }
+        }
+
+        async Task<HiveBatchUpdateMessage> ReceiveAsync()
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(15));
+            var message = await HiveControlProtocol.ReadAsync(stream, HiveControlJson.Default.HiveBatchUpdateMessage, timeout.Token);
+            await stream.WriteAsync(new byte[] { 1 }, timeout.Token);
+            await stream.FlushAsync(timeout.Token);
+            return message;
+        }
     }
 }

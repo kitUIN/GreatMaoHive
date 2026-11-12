@@ -1,5 +1,12 @@
 # 本地验证记录
 
+## 蜂巢批量通知小蜜蜂更新（2026-11-12）
+
+- `GreatMaoNetHive --update-bee` 不指定 ID 时通知批量开始时全部在线节点；指定 ID 保持单节点行为。固定本次会话快照，离线节点逐项列为跳过，中途上线或重连不会补发。按 ID 逐个等待确认，单节点拒绝、旧版不支持或超时不阻止后续节点。
+- 本机管道按节点分条返回结果并汇总接受/失败/跳过数量，单条仍限制 4 KiB，读写超时按每次交互计算。命令退出码 `0` 要求至少一只接受且无失败；存在失败、没有在线节点或中断返回 `1`。显式空 ID、重复更新参数及未知参数返回 `2`，不会误触发全量操作；旧蜂巢返回明确的升级提示。HTTP 更新接口仍保持指定节点方式。
+- `dotnet test tests/GreatMaoNet.Tests/GreatMaoNet.Tests.csproj -r win-x64 -p:SelfContained=true --logger "trx;LogFileName=hive-batch-full.trx"`：**182 通过、0 失败、0 跳过**。新增 6 项批量联调，并更新参数回归：独立命令进程通知多个 WebSocket 节点、101 个配置节点的分条报告、拒绝/超时/旧版后继续、超过旧 10 秒总时限、全离线、中途上线跳过及旧蜂巢兼容提示。既有单节点命令和 HTTP 更新测试继续通过。
+- `dotnet build src/GreatMaoNetHive/GreatMaoNetHive.csproj -c Release -r linux-x64 -p:SelfContained=true`：成功，**0 警告、0 错误**。未执行 Linux systemd 实机批量升级、Native AOT 发布或线上更新；未发布 Release、未部署。
+
 ## 蜂巢本机命令触发小蜜蜂更新（2026-11-12）
 
 - 新增 `GreatMaoNetHive --update-bee <节点ID>`（同时支持 `--update-bee=<节点ID>`）。一次性进程在创建 Host 前处理命令，使用同账号本机管道通知运行中的蜂巢，不启动第二个服务、不读取/修改监控数据库，也不依赖 HTTP 地址或管理员密钥。HTTP 与本机入口复用同一更新派发逻辑。
